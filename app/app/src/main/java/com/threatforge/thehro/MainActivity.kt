@@ -166,11 +166,6 @@ fun ThehroApp() {
             OutlinedTextField(serverUrl, { serverUrl = it }, label = { Text("Server URL") },
                 modifier = Modifier.fillMaxWidth())
 
-            HorizontalDivider()
-            Text("Volunteer test (leave empty for normal use)", fontWeight = FontWeight.SemiBold)
-            OutlinedTextField(volunteerId, { volunteerId = it }, label = { Text("Volunteer ID, e.g. V1") },
-                modifier = Modifier.fillMaxWidth())
-            ToggleRow("This run is under pressure (scripted call)", pressuredRun) { pressuredRun = it }
 
             Button(
                 enabled = !busy && amount.isNotEmpty(),
@@ -205,6 +200,11 @@ fun ThehroApp() {
             ) { Text(if (busy) "Checking…" else "Send money") }
             if (status.isNotEmpty()) Text(status, color = Color(0xFFB0401A))
             Text("Call active now: ${if (callNow()) "yes" else "no"}", color = Color.Gray)
+            HorizontalDivider()
+            Text("Volunteer test (leave empty for normal use)", fontWeight = FontWeight.SemiBold)
+            OutlinedTextField(volunteerId, { volunteerId = it }, label = { Text("Volunteer ID, e.g. V1") },
+                modifier = Modifier.fillMaxWidth())
+            ToggleRow("This run is under pressure (scripted call)", pressuredRun) { pressuredRun = it }
         } else {
             // -------------------------- Result screen --------------------------
             val tier = r.optInt("tier", 0)
@@ -236,17 +236,17 @@ fun ThehroApp() {
                     else Text("A bank officer will review this payment before it is released.")
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         OutlinedButton(onClick = { resetForm() }) { Text("Cancel payment") }
-                        if (tier == 2) Button(onClick = {
+                        Button(onClick = {
                             scope.launch {
                                 try {
                                     val res = postJson("$serverUrl/confirm", JSONObject()
                                         .put("case_id", r.optString("case_id"))
                                         .put("call_active", callNow()))
-                                    status = if (res.optString("status") == "released") "Released"
+                                    status = if (res.optString("status") == "released") "Released – payment sent"
                                              else res.optString("reason", "Still held")
                                 } catch (e: Exception) { status = "Could not reach server: ${e.message}" }
                             }
-                        }) { Text("I have ended the call – confirm") }
+                        }) { Text(if (tier == 2) "I have ended the call – confirm" else "Check status") }
                     }
                 }
                 else -> Button(onClick = { resetForm() }) { Text("New payment") }
