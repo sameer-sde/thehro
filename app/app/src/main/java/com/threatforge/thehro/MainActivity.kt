@@ -2,6 +2,8 @@ package com.threatforge.thehro
 
 import android.content.Context
 import android.content.Intent
+import kotlin.math.exp
+import kotlin.math.ln
 import android.net.Uri
 import android.media.AudioManager
 import android.os.Bundle
@@ -67,6 +69,18 @@ object Signals {
             lastAccountCharAt = now                    // a pause >1.5 s starts a new burst
         }
         onInput()
+    }
+
+    // On-device pressure model (logistic regression, trained on synthetic sessions; see ondevice/train.py).
+    // Runs entirely on the phone: only the final score is sent to the bank.
+    private val W = doubleArrayOf(0.9411, 1.6986, 1.2457, 4.5118, 0.548)
+    private const val B = -32.6609
+    fun pressureScore(): Double {
+        val x = doubleArrayOf(ln(1.0 + avgPauseMs()), accountBursts.toDouble(), appSwitches.toDouble(),
+            ln(1.0 + sessionSeconds()), if (accountPasted) 1.0 else 0.0)
+        var z = B
+        for (i in x.indices) z += W[i] * x[i]
+        return 1.0 / (1.0 + exp(-z))
     }
 
     fun avgPauseMs(): Long = if (fieldPauses.isEmpty()) 0 else fieldPauses.average().toLong()
@@ -196,6 +210,8 @@ fun ThehroApp() {
             Box(Modifier.fillMaxWidth().background(color).padding(16.dp)) {
                 Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
+            if (!r.isNull("on_device_score") && r.has("on_device_score")) Text("On-device pressure score: %.2f".format(r.optDouble("on_device_score")),
+                fontSize = 13.sp, color = Color.Gray)
             val reasons = r.optJSONArray("reasons")
             if (reasons != null && reasons.length() > 0) {
                 Text("Why:", fontWeight = FontWeight.SemiBold)
@@ -262,7 +278,8 @@ fun ThehroApp() {
                                 .put("avg_field_pause_ms", Signals.avgPauseMs())
                                 .put("account_number_pasted", Signals.accountPasted)
                                 .put("account_number_bursts", Signals.accountBursts)
-                                .put("app_switches", Signals.appSwitches))
+                                .put("app_switches", Signals.appSwitches)
+                                .put("on_device_score", Signals.pressureScore()))
                             .put("study", JSONObject()
                                 .put("volunteer", volunteerId.trim())
                                 .put("condition", if (pressuredRun) "pressured" else "normal"))

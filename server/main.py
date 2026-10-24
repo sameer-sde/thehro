@@ -73,6 +73,7 @@ class Phone(BaseModel):
     account_number_pasted: bool = False
     account_number_bursts: int = 0
     app_switches: int = 0
+    on_device_score: float = -1.0   # score from the phone's own model; -1 = not sent
 
 
 class Study(BaseModel):
@@ -157,6 +158,20 @@ def update_baseline(user_id: str, p: Phone):
         json.dump(BASELINES, f)
 
 
+# On-device pressure model: logistic regression on 5 phone timings, trained on synthetic sessions
+# (ondevice/train.py, seed 11). The same weights run inside the app; this copy lets the server
+# check old runs. Features: log(1+pause ms), bursts, app switches, log(1+session s), pasted.
+ONDEVICE_W = [0.9411, 1.6986, 1.2457, 4.5118, 0.548]
+ONDEVICE_B = -32.6609
+ONDEVICE_THRESHOLD = 0.8
+
+
+def on_device_score(pause_ms, bursts, switches, session_s, pasted) -> float:
+    x = [np.log1p(max(pause_ms, 0)), bursts, switches, np.log1p(max(session_s, 0)), float(pasted)]
+    z = ONDEVICE_B + sum(w * v for w, v in zip(ONDEVICE_W, x))
+    return float(1 / (1 + np.exp(-z)))
+
+
 def phone_pressure(p: Phone, base=None) -> bool:
     """Behaviour signal: 2+ of these in one session. Uses the user's own baseline when known."""
     if base:
@@ -169,6 +184,8 @@ def phone_pressure(p: Phone, base=None) -> bool:
                 p.account_number_pasted or p.account_number_bursts >= 3,
                 p.app_switches >= 2,
                 p.session_seconds > 300]
+    if p.on_device_score >= 0:                      # the phone's model counts as one more vote
+        hits.append(p.on_device_score >= ONDEVICE_THRESHOLD)
     return sum(hits) >= 2
 
 
@@ -261,7 +278,8 @@ def score_payment(req: ScoreRequest):
         "study": req.study.volunteer or None,
     })
     return {"case_id": case_id, "tier": tier, "label": LABELS[tier], "score": round(prob, 3),
-            "reasons": reasons, "hold_minutes": 240 if tier >= 2 else 0}
+            "reasons": reasons, "hold_minutes": 240 if tier >= 2 else 0,
+            "on_device_score": round(req.phone.on_device_score, 3) if req.phone.on_device_score >= 0 else None}
 
 
 @app.post("/confirm")
@@ -311,6 +329,11 @@ def study_summary():
                      "avg_app_switches": avg("app_switches"),
                      "share_pasted": round(sum(r["account_number_pasted"] == "True" for r in rs) / len(rs), 2),
                      "share_held_or_warned": round(sum(int(r["tier"]) >= 1 for r in rs) / len(rs), 2)}
+        sc = [on_device_score(float(r["avg_field_pause_ms"]), float(r["account_number_bursts"]),
+                              float(r["app_switches"]), float(r["session_seconds"]),
+                              r["account_number_pasted"] == "True") for r in rs]
+        out[cond]["avg_on_device_score"] = round(sum(sc) / len(sc), 3)
+        out[cond]["share_on_device_flagged"] = round(sum(x >= ONDEVICE_THRESHOLD for x in sc) / len(sc), 2)
     return out
 
 
