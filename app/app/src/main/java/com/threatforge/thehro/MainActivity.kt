@@ -5,6 +5,8 @@ import android.content.Intent
 import kotlin.math.exp
 import kotlin.math.ln
 import android.net.Uri
+import android.speech.tts.TextToSpeech
+import java.util.Locale
 import android.media.AudioManager
 import android.os.Bundle
 import android.os.SystemClock
@@ -146,8 +148,24 @@ fun ThehroApp() {
 
     fun callNow() = isCallActive(ctx) || simulateCall
 
+    // Language of the warning screen, and spoken alerts (Text-to-Speech, built into Android).
+    var hindi by remember { mutableStateOf(false) }
+    val tts = remember { mutableStateOf<TextToSpeech?>(null) }
+    DisposableEffect(Unit) {
+        var engine: TextToSpeech? = null
+        engine = TextToSpeech(ctx) { st -> if (st == TextToSpeech.SUCCESS) tts.value = engine }
+        onDispose { engine?.shutdown() }
+    }
+    fun speak(en: String, hi: String) {
+        val t = tts.value ?: return
+        val hiOk = hindi && t.setLanguage(Locale.forLanguageTag("hi-IN")) >= 0
+        if (!hiOk && t.setLanguage(Locale.forLanguageTag("en-IN")) < 0) t.setLanguage(Locale.US)
+        t.speak(if (hiOk) hi else en, TextToSpeech.QUEUE_FLUSH, null, "thehro")
+    }
+
     fun resetForm() {
-        payee = ""; account = ""; amount = ""; result = null; status = ""
+        payee = ""; account = ""; amount = ""; result = null; status = ""; hindi = false
+        tts.value?.stop()
         Signals.reset()
     }
 
@@ -202,23 +220,32 @@ fun ThehroApp() {
             // -------------------------- Result screen --------------------------
             val tier = r.optInt("tier", 0)
             val (color, title) = when (tier) {
-                0 -> Color(0xFF2E7D32) to "Payment sent"
-                1 -> Color(0xFFE09B2D) to "Please check before you continue"
-                2 -> Color(0xFFB0401A) to "Payment on hold for your safety"
-                else -> Color(0xFF14213D) to "Held for review by your bank"
+                0 -> Color(0xFF2E7D32) to (if (hindi) "भुगतान भेजा गया" else "Payment sent")
+                1 -> Color(0xFFE09B2D) to (if (hindi) "आगे बढ़ने से पहले जाँच लें" else "Please check before you continue")
+                2 -> Color(0xFFB0401A) to (if (hindi) "आपकी सुरक्षा के लिए भुगतान रोका गया" else "Payment on hold for your safety")
+                else -> Color(0xFF14213D) to (if (hindi) "बैंक द्वारा जाँच के लिए रोका गया" else "Held for review by your bank")
             }
+            val safetyEn = "Police and government agencies never ask for money on a call."
+            val safetyHi = "पुलिस या सरकारी एजेंसी कभी फ़ोन पर पैसे नहीं माँगती।"
+            val spokenEn = "Stop. This payment is on hold for your safety. $safetyEn Please end the call now."
+            val spokenHi = "रुकिए। आपकी सुरक्षा के लिए यह भुगतान रोका गया है। $safetyHi कृपया कॉल अभी काट दें।"
+            // Speak the alert once when a payment is held, so the user hears it even while on the call.
+            LaunchedEffect(r) { if (tier >= 2) { kotlinx.coroutines.delay(400); speak(spokenEn, spokenHi) } }
             Box(Modifier.fillMaxWidth().background(color).padding(16.dp)) {
                 Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
             if (!r.isNull("on_device_score") && r.has("on_device_score")) Text("On-device pressure score: %.2f".format(r.optDouble("on_device_score")),
                 fontSize = 13.sp, color = Color.Gray)
-            val reasons = r.optJSONArray("reasons")
+            if (tier >= 1) Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Chip("हिंदी", hindi, Modifier.weight(1f)) { hindi = !hindi }
+                Chip(if (hindi) "🔊 सुनें" else "🔊 Read aloud", false, Modifier.weight(1f)) { speak(spokenEn, spokenHi) }
+            }
+            val reasons = r.optJSONArray(if (hindi && r.has("reasons_hi")) "reasons_hi" else "reasons")
             if (reasons != null && reasons.length() > 0) {
-                Text("Why:", fontWeight = FontWeight.SemiBold)
+                Text(if (hindi) "क्यों:" else "Why:", fontWeight = FontWeight.SemiBold)
                 for (i in 0 until reasons.length()) Text("• ${reasons.getString(i)}")
             }
-            if (tier >= 1) Text("Police and government agencies never ask for money on a call.",
-                fontWeight = FontWeight.SemiBold)
+            if (tier >= 1) Text(if (hindi) safetyHi else safetyEn, fontWeight = FontWeight.SemiBold)
 
             when (tier) {
                 1 -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -226,15 +253,29 @@ fun ThehroApp() {
                     Button(onClick = { result = JSONObject().put("tier", 0) }) { Text("Continue") }
                 }
                 2, 3 -> {
-                    if (tier == 2) Text("Held for ${r.optInt("hold_minutes", 240) / 60} hours. " +
-                            "End your call, then confirm again. Your guardian has been notified.")
-                    else Text("A bank officer will review this payment before it is released.")
+                    val hrs = r.optInt("hold_minutes", 240) / 60
+                    val guardian = r.optString("guardian", "your guardian")
+                    if (tier == 2) Text(if (hindi) "भुगतान $hrs घंटे के लिए रोका गया है। कॉल काटें, फिर दोबारा पुष्टि करें।"
+                                        else "Held for $hrs hours. End your call, then confirm again.")
+                    else Text(if (hindi) "बैंक अधिकारी जाँच के बाद ही भुगतान जारी करेंगे।"
+                              else "A bank officer will review this payment before it is released.")
+                    Text(if (hindi) "आपके परिवार को सूचित किया गया: $guardian" else "Guardian alerted: $guardian",
+                        color = Color(0xFF1F6F8B), fontWeight = FontWeight.SemiBold)
+                    OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                        // Lets the user (or the app, in production) message the guardian directly.
+                        val who = r.optString("customer", "Your family member")
+                        val msg = "Thehro safety alert: $who is trying to send Rs ${r.optLong("amount")} " +
+                                "while on a phone call. The bank has paused it. Please call $who now. " +
+                                "Scammers pose as police and keep victims on the call."
+                        ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND)
+                            .setType("text/plain").putExtra(Intent.EXTRA_TEXT, msg), "Message guardian"))
+                    }) { Text(if (hindi) "परिवार को संदेश भेजें" else "Message guardian now") }
                     ToggleRow("Simulate active call (emulator only)", simulateCall) { simulateCall = it }
                     Text("Call active now: ${if (callNow()) "yes" else "no"}", color = Color.Gray)
                     OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
                         // Opens the dialer with 1930 filled in; the user presses call. No permission needed.
                         ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:1930")))
-                    }) { Text("Report to cyber helpline 1930") }
+                    }) { Text(if (hindi) "साइबर हेल्पलाइन 1930 पर शिकायत करें" else "Report to cyber helpline 1930") }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         OutlinedButton(onClick = { resetForm() }) { Text("Cancel payment") }
                         Button(onClick = {

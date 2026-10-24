@@ -9,6 +9,7 @@ All data is synthetic. No real bank, customer or call data is used.
 import csv
 import html
 import json
+import re
 import os
 import time
 import uuid
@@ -223,6 +224,28 @@ def rule_part(req: ScoreRequest, use_baseline: bool = True):
     return sum(sg[0] for sg in signals), len(signals), [sg[1] for sg in signals], x, user
 
 
+# Hindi versions of the customer reasons (most victims are older and may not read English).
+HINDI = [
+    (r"You are on a call while making this payment", "भुगतान करते समय आप फ़ोन कॉल पर हैं"),
+    (r"New payee added (\d+) minutes ago", "नया प्राप्तकर्ता {0} मिनट पहले जोड़ा गया"),
+    (r"Amount is (\d+)x your usual", "राशि आपकी सामान्य राशि से {0} गुना है"),
+    (r"Fixed deposit broken today", "आज एफडी तोड़ी गई"),
+    (r"Another large transfer in the last 6 hours", "पिछले 6 घंटों में एक और बड़ा ट्रांसफ़र"),
+    (r"Transfer limit raised today", "आज ट्रांसफ़र सीमा बढ़ाई गई"),
+    (r"This sends more than half your balance", "यह आपके बैलेंस के आधे से ज़्यादा है"),
+    (r"Much slower and more distracted than your usual payments", "आपके सामान्य भुगतानों से बहुत धीमा और विचलित"),
+    (r"Unusual hesitation and app switching during this payment", "इस भुगतान के दौरान असामान्य झिझक और ऐप बदलना"),
+]
+
+
+def to_hindi(reason: str) -> str:
+    for pat, hi in HINDI:
+        mt = re.fullmatch(pat, reason)
+        if mt:
+            return hi.format(*mt.groups())
+    return reason
+
+
 def decide(points: int, n: int, prob: float, amount: float) -> int:
     # Rule guard: no single signal can raise an alert.
     tier = 0
@@ -278,7 +301,9 @@ def score_payment(req: ScoreRequest):
         "study": req.study.volunteer or None,
     })
     return {"case_id": case_id, "tier": tier, "label": LABELS[tier], "score": round(prob, 3),
-            "reasons": reasons, "hold_minutes": 240 if tier >= 2 else 0,
+            "reasons": reasons, "reasons_hi": [to_hindi(x) for x in reasons],
+            "customer": user["name"], "guardian": user["guardian"], "amount": req.amount,
+            "hold_minutes": 240 if tier >= 2 else 0,
             "on_device_score": round(req.phone.on_device_score, 3) if req.phone.on_device_score >= 0 else None}
 
 
@@ -364,7 +389,16 @@ def analyst():
         rows += (f'<tr><td>{c["time"]}</td><td>{html.escape(c["user_name"])}</td><td>Rs {c["amount"]:,.0f}</td>'
                  f'<td class="t{c["tier"]}">{c["label"]}</td><td>{c["score"]}</td><td>{reasons}</td>'
                  f'<td>{c["status"]}</td><td>{actions}</td></tr>')
-    body = ("<h1>Thehro – fraud analyst queue</h1><p>Held and review cases (refreshes every 5 s). Synthetic demo data.</p>"
+    allc = list(CASES.values())
+    count = lambda f: sum(1 for c in allc if f(c))
+    stats = [("Payments checked", len(allc)), ("Warned", count(lambda c: c["tier"] == 1)),
+             ("Held or in review", count(lambda c: c["tier"] >= 2)),
+             ("Released", count(lambda c: c["tier"] >= 2 and c["status"] == "released")),
+             ("Kept by analyst", count(lambda c: c["status"] == "held by analyst"))]
+    tiles = "".join(f'<div style="display:inline-block;background:#fff;border:1px solid #D9D3C4;border-radius:10px;'
+                    f'padding:10px 18px;margin:0 10px 10px 0"><div style="font-size:28px;font-weight:700">{v}</div>'
+                    f'<div style="color:#4A5468">{k}</div></div>' for k, v in stats)
+    body = ("<h1>Thehro – fraud analyst queue</h1>" + tiles + "<p>Held and review cases (refreshes every 5 s). Synthetic demo data.</p>"
             "<table><tr><th>Time</th><th>Customer</th><th>Amount</th><th>Tier</th><th>Model score</th>"
             "<th>Reasons</th><th>Status</th><th>Action</th></tr>" + (rows or '<tr><td colspan="8">No held cases</td></tr>') + "</table>")
     return PAGE.format(title="Analyst queue", body=body)
