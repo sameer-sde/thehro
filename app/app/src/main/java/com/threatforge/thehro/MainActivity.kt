@@ -104,7 +104,7 @@ fun ThehroApp() {
     val scope = rememberCoroutineScope()
 
     // Server address: emulator -> 10.0.2.2 reaches this laptop. Real phone -> laptop's Wi-Fi IP.
-    var serverUrl by remember { mutableStateOf("http://10.0.2.2:8000") }
+    var serverUrl by remember { mutableStateOf("http://localhost:8000") }
 
     var payee by remember { mutableStateOf("") }
     var account by remember { mutableStateOf("") }
@@ -116,6 +116,10 @@ fun ThehroApp() {
     var limitRaised by remember { mutableStateOf(false) }
     var priorLarge by remember { mutableStateOf("0") }
     var simulateCall by remember { mutableStateOf(false) }   // emulator cannot place calls
+
+    // Volunteer test: leave Volunteer ID empty for normal demo use.
+    var volunteerId by remember { mutableStateOf("") }
+    var pressuredRun by remember { mutableStateOf(false) }
 
     var result by remember { mutableStateOf<JSONObject?>(null) }
     var status by remember { mutableStateOf("") }
@@ -162,6 +166,12 @@ fun ThehroApp() {
             OutlinedTextField(serverUrl, { serverUrl = it }, label = { Text("Server URL") },
                 modifier = Modifier.fillMaxWidth())
 
+            HorizontalDivider()
+            Text("Volunteer test (leave empty for normal use)", fontWeight = FontWeight.SemiBold)
+            OutlinedTextField(volunteerId, { volunteerId = it }, label = { Text("Volunteer ID, e.g. V1") },
+                modifier = Modifier.fillMaxWidth())
+            ToggleRow("This run is under pressure (scripted call)", pressuredRun) { pressuredRun = it }
+
             Button(
                 enabled = !busy && amount.isNotEmpty(),
                 modifier = Modifier.fillMaxWidth(),
@@ -183,6 +193,9 @@ fun ThehroApp() {
                             .put("account_number_pasted", Signals.accountPasted)
                             .put("account_number_bursts", Signals.accountBursts)
                             .put("app_switches", Signals.appSwitches))
+                        .put("study", JSONObject()
+                            .put("volunteer", volunteerId.trim())
+                            .put("condition", if (pressuredRun) "pressured" else "normal"))
                     scope.launch {
                         try { result = postJson("$serverUrl/score", body) }
                         catch (e: Exception) { status = "Could not reach server: ${e.message}" }

@@ -6,7 +6,10 @@ Docs: http://localhost:8000/docs     Analyst: /analyst     Guardian: /guardian/<
 
 All data is synthetic. No real bank, customer or call data is used.
 """
+import csv
 import html
+import json
+import os
 import time
 import uuid
 
@@ -72,12 +75,18 @@ class Phone(BaseModel):
     app_switches: int = 0
 
 
+class Study(BaseModel):
+    volunteer: str = ""          # e.g. "V1"; empty = not a study run
+    condition: str = "normal"    # "normal" or "pressured"
+
+
 class ScoreRequest(BaseModel):
     user_id: str
     payee_id: str = "unknown"
     amount: float
     account: Account = Account()
     phone: Phone = Phone()
+    study: Study = Study()
 
 
 class ConfirmRequest(BaseModel):
@@ -85,8 +94,42 @@ class ConfirmRequest(BaseModel):
     call_active: bool
 
 
-CASES: dict[str, dict] = {}       # evidence log (in memory for the demo)
 LABELS = {0: "PASS", 1: "WARN", 2: "HOLD", 3: "REVIEW"}
+
+# Evidence log: every decision is appended to cases.jsonl and reloaded on restart.
+CASES_FILE = "cases.jsonl"
+STUDY_FILE = "study.csv"
+STUDY_FIELDS = ["time", "volunteer", "condition", "call_active", "session_seconds", "avg_field_pause_ms",
+                "account_number_pasted", "account_number_bursts", "app_switches", "tier", "label"]
+CASES: dict[str, dict] = {}
+if os.path.exists(CASES_FILE):
+    with open(CASES_FILE) as f:
+        for line in f:
+            if line.strip():
+                c = json.loads(line)
+                CASES[c["case_id"]] = c
+
+
+def save_case(case: dict):
+    """Append the latest state of a case (later lines win on reload)."""
+    CASES[case["case_id"]] = case
+    with open(CASES_FILE, "a") as f:
+        f.write(json.dumps(case) + "\n")
+
+
+def log_study(req, tier: int):
+    new = not os.path.exists(STUDY_FILE)
+    with open(STUDY_FILE, "a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=STUDY_FIELDS)
+        if new:
+            w.writeheader()
+        p = req.phone
+        w.writerow({"time": time.strftime("%H:%M:%S"), "volunteer": req.study.volunteer,
+                    "condition": req.study.condition, "call_active": p.call_active,
+                    "session_seconds": p.session_seconds, "avg_field_pause_ms": p.avg_field_pause_ms,
+                    "account_number_pasted": p.account_number_pasted,
+                    "account_number_bursts": p.account_number_bursts, "app_switches": p.app_switches,
+                    "tier": tier, "label": LABELS[tier]})
 
 
 # ------------------------------------------------------------------ scoring
@@ -154,13 +197,16 @@ def health():
 def score_payment(req: ScoreRequest):
     tier, prob, reasons, user = score(req)
     case_id = "c_" + uuid.uuid4().hex[:6]
-    CASES[case_id] = {
+    if req.study.volunteer:
+        log_study(req, tier)
+    save_case({
         "case_id": case_id, "time": time.strftime("%H:%M:%S"), "user_id": req.user_id,
         "user_name": user["name"], "guardian": user["guardian"], "payee": req.payee_id,
         "amount": req.amount, "tier": tier, "label": LABELS[tier], "score": round(prob, 3),
         "reasons": reasons, "call_active": req.phone.call_active,
         "status": {0: "sent", 1: "warned", 2: "held", 3: "awaiting review"}[tier],
-    }
+        "study": req.study.volunteer or None,
+    })
     return {"case_id": case_id, "tier": tier, "label": LABELS[tier], "score": round(prob, 3),
             "reasons": reasons, "hold_minutes": 240 if tier >= 2 else 0}
 
@@ -176,12 +222,36 @@ def confirm(req: ConfirmRequest):
         return {"status": "still_held", "reason": "Waiting for a bank officer to review this payment."}
     # Demo shortcut: the 4-hour cooling period is skipped so the flow can be shown live.
     case["status"] = "released"
+    save_case(case)
     return {"status": "released"}
 
 
 @app.get("/cases")
 def cases():
     return list(CASES.values())
+
+
+@app.get("/study/summary")
+def study_summary():
+    """Average phone signals per condition, for the results slide."""
+    if not os.path.exists(STUDY_FILE):
+        return {"runs": 0}
+    with open(STUDY_FILE) as f:
+        rows = list(csv.DictReader(f))
+    out = {"runs": len(rows), "volunteers": len({r["volunteer"] for r in rows})}
+    for cond in ("normal", "pressured"):
+        rs = [r for r in rows if r["condition"] == cond]
+        if not rs:
+            continue
+        avg = lambda k: round(sum(float(r[k]) for r in rs) / len(rs), 1)
+        out[cond] = {"runs": len(rs),
+                     "avg_session_seconds": avg("session_seconds"),
+                     "avg_field_pause_ms": avg("avg_field_pause_ms"),
+                     "avg_account_bursts": avg("account_number_bursts"),
+                     "avg_app_switches": avg("app_switches"),
+                     "share_pasted": round(sum(r["account_number_pasted"] == "True" for r in rs) / len(rs), 2),
+                     "share_held_or_warned": round(sum(int(r["tier"]) >= 1 for r in rs) / len(rs), 2)}
+    return out
 
 
 # ---------------------------------------------------------------- web pages
@@ -201,7 +271,7 @@ def analyst():
         if c["tier"] < 2:
             continue
         reasons = "<br>".join(html.escape(r) for r in c["reasons"])
-        actions = ""
+        actions = f'<a href="/guardian/{c["case_id"]}" target="_blank">Guardian view</a><br>'
         if c["status"] != "released":
             actions = (f'<form method="post" action="/analyst/{c["case_id"]}/release" style="display:inline">'
                        f'<button>Release</button></form>'
@@ -222,6 +292,7 @@ def analyst_action(case_id: str, action: str):
     if not case:
         raise HTTPException(404, "Unknown case")
     case["status"] = "released" if action == "release" else "held by analyst"
+    save_case(case)
     return RedirectResponse("/analyst", status_code=303)
 
 
