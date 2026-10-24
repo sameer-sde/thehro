@@ -85,10 +85,16 @@ class Study(BaseModel):
 class ScoreRequest(BaseModel):
     user_id: str
     payee_id: str = "unknown"
+    payee_account_hash: str = ""   # SHA-256 of the account number, made on the phone (no raw number sent)
     amount: float
     account: Account = Account()
     phone: Phone = Phone()
     study: Study = Study()
+
+
+class CheckIn(BaseModel):
+    case_id: str
+    answers: list[bool] = []       # the customer's yes/no answers to the safety questions
 
 
 class ConfirmRequest(BaseModel):
@@ -215,6 +221,12 @@ def rule_part(req: ScoreRequest, use_baseline: bool = True):
         signals.append((2, "Transfer limit raised today"))
     if share >= 0.5:
         signals.append((2, "This sends more than half your balance"))
+    # Mule network: the same receiving account already appeared in other held payments.
+    if req.payee_account_hash:
+        k = sum(1 for c in CASES.values() if c.get("payee_hash") == req.payee_account_hash
+                and c["tier"] >= 2 and not c.get("study"))
+        if k:
+            signals.append((3, f"This account received {k} other held payment(s): possible mule account"))
     base = baseline_of(req.user_id) if use_baseline else None
     if phone_pressure(p, base):
         signals.append((2, "Much slower and more distracted than your usual payments" if base
@@ -234,6 +246,9 @@ HINDI = [
     (r"Transfer limit raised today", "आज ट्रांसफ़र सीमा बढ़ाई गई"),
     (r"This sends more than half your balance", "यह आपके बैलेंस के आधे से ज़्यादा है"),
     (r"Much slower and more distracted than your usual payments", "आपके सामान्य भुगतानों से बहुत धीमा और विचलित"),
+    (r"This account received (\d+) other held payment\(s\): possible mule account",
+     "इस खाते में {0} अन्य रोके गए भुगतान आए: संभावित म्यूल खाता"),
+    (r"Customer said a caller is directing this payment", "ग्राहक ने बताया कि कॉल करने वाला यह भुगतान करवा रहा है"),
     (r"Unusual hesitation and app switching during this payment", "इस भुगतान के दौरान असामान्य झिझक और ऐप बदलना"),
 ]
 
@@ -298,13 +313,31 @@ def score_payment(req: ScoreRequest):
         "amount": req.amount, "tier": tier, "label": LABELS[tier], "score": round(prob, 3),
         "reasons": reasons, "call_active": req.phone.call_active,
         "status": {0: "sent", 1: "warned", 2: "held", 3: "awaiting review"}[tier],
-        "study": req.study.volunteer or None,
+        "study": req.study.volunteer or None, "payee_hash": req.payee_account_hash or None,
     })
     return {"case_id": case_id, "tier": tier, "label": LABELS[tier], "score": round(prob, 3),
             "reasons": reasons, "reasons_hi": [to_hindi(x) for x in reasons],
             "customer": user["name"], "guardian": user["guardian"], "amount": req.amount,
             "hold_minutes": 240 if tier >= 2 else 0,
             "on_device_score": round(req.phone.on_device_score, 3) if req.phone.on_device_score >= 0 else None}
+
+
+@app.post("/checkin")
+def checkin(req: CheckIn):
+    """Safety questions on the warning/hold screen. Any 'yes' sends the payment to a bank officer."""
+    case = CASES.get(req.case_id)
+    if not case:
+        raise HTTPException(404, "Unknown case")
+    case["checkin"] = req.answers
+    escalated = any(req.answers)
+    if escalated:
+        reason = "Customer said a caller is directing this payment"
+        if reason not in case["reasons"]:
+            case["reasons"] = case["reasons"] + [reason]
+        case.update(tier=3, label=LABELS[3], status="awaiting review")
+    save_case(case)
+    return {"escalated": escalated, "tier": case["tier"], "reasons": case["reasons"],
+            "reasons_hi": [to_hindi(x) for x in case["reasons"]]}
 
 
 @app.post("/confirm")

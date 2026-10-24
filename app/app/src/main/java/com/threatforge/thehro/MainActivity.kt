@@ -107,6 +107,10 @@ suspend fun postJson(url: String, body: JSONObject): JSONObject = withContext(Di
     JSONObject(stream.bufferedReader().use { it.readText() })
 }
 
+// The account number is hashed on the phone; the bank compares hashes to spot mule accounts.
+fun sha256(t: String): String = java.security.MessageDigest.getInstance("SHA-256")
+    .digest(t.toByteArray()).joinToString("") { "%02x".format(it) }
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -247,11 +251,53 @@ fun ThehroApp() {
             }
             if (tier >= 1) Text(if (hindi) safetyHi else safetyEn, fontWeight = FontWeight.SemiBold)
 
-            when (tier) {
-                1 -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(onClick = { resetForm() }) { Text("Cancel payment") }
-                    Button(onClick = { result = JSONObject().put("tier", 0) }) { Text("Continue") }
+            if (r.optBoolean("escalated")) Text(
+                if (hindi) "यही ‘डिजिटल अरेस्ट’ ठगी का तरीका है। असली पुलिस कभी फ़ोन या वीडियो कॉल पर गिरफ़्तार नहीं करती। बैंक अधिकारी आपको कॉल करेंगे।"
+                else "This is how ‘digital arrest’ scams work. Real police never arrest anyone over a phone or video call. " +
+                     "Your payment is blocked until a bank officer calls you.",
+                color = Color(0xFFB0401A), fontWeight = FontWeight.Bold)
+
+            // Safety check: three yes/no questions. Any "yes" sends the payment to a bank officer.
+            if (tier in 1..2 && r.has("case_id")) {
+                var answers by remember(r) { mutableStateOf(listOf(false, false, false)) }
+                var sent by remember(r) { mutableStateOf(false) }
+                val qs = if (hindi) listOf("क्या फ़ोन पर कोई आपको बता रहा है कि क्या करना है?",
+                                           "क्या उन्होंने कहा कि आप गिरफ़्तार हैं या जाँच चल रही है?",
+                                           "क्या उन्होंने यह बात परिवार से छिपाने को कहा?")
+                         else listOf("Is someone on the phone telling you what to do?",
+                                     "Did they say you are under arrest or being investigated?",
+                                     "Did they ask you to keep this secret from family?")
+                HorizontalDivider()
+                Text(if (hindi) "सुरक्षा जाँच" else "Quick safety check", fontWeight = FontWeight.SemiBold)
+                qs.forEachIndexed { i, q ->
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(q, Modifier.weight(1f), fontSize = 14.sp)
+                        Chip(if (hindi) "हाँ" else "Yes", answers[i]) {
+                            answers = answers.toMutableList().also { it[i] = !it[i] }
+                        }
+                    }
                 }
+                if (!sent) OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                    scope.launch {
+                        try {
+                            val arr = org.json.JSONArray(); answers.forEach { arr.put(it) }
+                            val res = postJson("$serverUrl/checkin",
+                                JSONObject().put("case_id", r.optString("case_id")).put("answers", arr))
+                            sent = true
+                            if (res.optBoolean("escalated")) {
+                                result = JSONObject(r.toString()).put("tier", 3).put("escalated", true)
+                                    .put("reasons", res.optJSONArray("reasons"))
+                                    .put("reasons_hi", res.optJSONArray("reasons_hi"))
+                            }
+                        } catch (e: Exception) { status = "Could not reach server: ${e.message}" }
+                    }
+                }) { Text(if (hindi) "जवाब भेजें" else "Submit answers") }
+                else Text(if (hindi) "धन्यवाद। जवाब बैंक को भेजे गए।" else "Thanks. Your answers were sent to the bank.",
+                    color = Color.Gray)
+                HorizontalDivider()
+            }
+
+            when (tier) {
                 2, 3 -> {
                     val hrs = r.optInt("hold_minutes", 240) / 60
                     val guardian = r.optString("guardian", "your guardian")
@@ -276,24 +322,42 @@ fun ThehroApp() {
                         // Opens the dialer with 1930 filled in; the user presses call. No permission needed.
                         ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:1930")))
                     }) { Text(if (hindi) "साइबर हेल्पलाइन 1930 पर शिकायत करें" else "Report to cyber helpline 1930") }
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        OutlinedButton(onClick = { resetForm() }) { Text("Cancel payment") }
-                        Button(onClick = {
-                            scope.launch {
-                                try {
-                                    val res = postJson("$serverUrl/confirm", JSONObject()
-                                        .put("case_id", r.optString("case_id"))
-                                        .put("call_active", callNow()))
-                                    status = if (res.optString("status") == "released") "Released – payment sent"
-                                             else res.optString("reason", "Still held")
-                                } catch (e: Exception) { status = "Could not reach server: ${e.message}" }
-                            }
-                        }) { Text(if (tier == 2) "I have ended the call – confirm" else "Check status") }
-                    }
                 }
-                else -> Button(onClick = { resetForm() }) { Text("New payment") }
+
             }
+        }
+    }
+    val rr = result
+    if (rr != null) {
+        // Action buttons stay pinned at the bottom so they never scroll off screen.
+        val tier = rr.optInt("tier", 0)
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (status.isNotEmpty()) Text(status, fontWeight = FontWeight.SemiBold)
+            when (tier) {
+                0 -> Button(modifier = Modifier.fillMaxWidth(), onClick = { resetForm() }) { Text("New payment") }
+                1 -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(modifier = Modifier.weight(1f), onClick = { resetForm() }) {
+                        Text(if (hindi) "रद्द करें" else "Cancel payment") }
+                    Button(modifier = Modifier.weight(1f), onClick = { result = JSONObject().put("tier", 0) }) {
+                        Text(if (hindi) "जारी रखें" else "Continue") }
+                }
+                else -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(modifier = Modifier.weight(1f), onClick = { resetForm() }) {
+                        Text(if (hindi) "रद्द करें" else "Cancel payment") }
+                    Button(modifier = Modifier.weight(1.4f), onClick = {
+                        scope.launch {
+                            try {
+                                val res = postJson("$serverUrl/confirm", JSONObject()
+                                    .put("case_id", rr.optString("case_id"))
+                                    .put("call_active", callNow()))
+                                status = if (res.optString("status") == "released") "Released – payment sent"
+                                         else res.optString("reason", "Still held")
+                            } catch (e: Exception) { status = "Could not reach server: ${e.message}" }
+                        }
+                    }) { Text(if (tier == 2) "Call ended – confirm" else "Check status") }
+                }
+            }
         }
     }
     if (result == null) {
@@ -307,6 +371,7 @@ fun ThehroApp() {
                         val body = JSONObject()
                             .put("user_id", "demo_user_1")
                             .put("payee_id", payee.ifBlank { "unknown" })
+                            .put("payee_account_hash", if (account.isBlank()) "" else sha256(account.trim()))
                             .put("amount", amount.toLongOrNull() ?: 0L)
                             .put("account", JSONObject()
                                 .put("payee_added_minutes_ago", if (newPayee) 12 else 100000)
