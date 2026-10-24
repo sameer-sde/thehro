@@ -331,9 +331,10 @@ def analyst():
         if c["tier"] < 2:
             continue
         reasons = "<br>".join(html.escape(r) for r in c["reasons"])
-        actions = f'<a href="/guardian/{c["case_id"]}" target="_blank">Guardian view</a><br>'
+        actions = (f'<a href="/guardian/{c["case_id"]}" target="_blank">Guardian view</a> · '
+                   f'<a href="/report/{c["case_id"]}" target="_blank">Report pack</a><br>')
         if c["status"] != "released":
-            actions = (f'<form method="post" action="/analyst/{c["case_id"]}/release" style="display:inline">'
+            actions += (f'<form method="post" action="/analyst/{c["case_id"]}/release" style="display:inline">'
                        f'<button>Release</button></form>'
                        f'<form method="post" action="/analyst/{c["case_id"]}/keep" style="display:inline">'
                        f'<button>Keep holding</button></form>')
@@ -518,3 +519,23 @@ def evaluate(cases: list[LabelledCase]):
         rows = [(c.name or "case", c.label, c.case) for c, _ in labelled]
         summary = metrics(rows, [r for _, r in labelled])
     return {"predictions": preds, "metrics": summary}
+
+
+@app.get("/report/{case_id}", response_class=HTMLResponse)
+def report_pack(case_id: str):
+    """Evidence pack for a complaint to the 1930 helpline / cybercrime.gov.in (synthetic demo data)."""
+    c = CASES.get(case_id)
+    if not c:
+        raise HTTPException(404, "Unknown case")
+    reasons = "".join(f"<li>{html.escape(r)}</li>" for r in c["reasons"]) or "<li>None recorded</li>"
+    rows = [("Case ID", c["case_id"]), ("Time", c["time"]), ("Customer", c["user_name"]),
+            ("Payee entered", c["payee"]), ("Amount", f"Rs {c['amount']:,.0f}"),
+            ("Call active during payment", "Yes" if c["call_active"] else "No"),
+            ("Decision", f"{c['label']} (tier {c['tier']})"), ("Current status", c["status"]),
+            ("Model score", str(c["score"]))]
+    table = "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(str(v))}</td></tr>" for k, v in rows)
+    body = (f"<h1>Fraud report pack</h1><p>For a complaint on the national cybercrime helpline <b>1930</b> "
+            f"or at <b>cybercrime.gov.in</b>. Synthetic demo data.</p><table>{table}</table>"
+            f"<h2>Why the payment was stopped</h2><ul>{reasons}</ul>"
+            f"<p style='color:#4A5468'>Contains no call audio, call logs, contacts or typed text.</p>")
+    return PAGE.format(title="Report pack", body=body).replace('<meta http-equiv="refresh" content="5">', "")

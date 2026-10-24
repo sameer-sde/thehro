@@ -1,6 +1,8 @@
 package com.threatforge.thehro
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.media.AudioManager
 import android.os.Bundle
 import android.os.SystemClock
@@ -213,6 +215,10 @@ fun ThehroApp() {
                     else Text("A bank officer will review this payment before it is released.")
                     ToggleRow("Simulate active call (emulator only)", simulateCall) { simulateCall = it }
                     Text("Call active now: ${if (callNow()) "yes" else "no"}", color = Color.Gray)
+                    OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                        // Opens the dialer with 1930 filled in; the user presses call. No permission needed.
+                        ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:1930")))
+                    }) { Text("Report to cyber helpline 1930") }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         OutlinedButton(onClick = { resetForm() }) { Text("Cancel payment") }
                         Button(onClick = {
