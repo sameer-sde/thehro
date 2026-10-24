@@ -142,7 +142,8 @@ def phone_pressure(p: Phone) -> bool:
     return sum(hits) >= 2
 
 
-def score(req: ScoreRequest):
+def rule_part(req: ScoreRequest):
+    """Rule signals and the model's feature vector for one payment."""
     user = DEMO_USERS.get(req.user_id, DEFAULT_USER)
     ratio = req.amount / max(user["usual_amount"], 1)
     share = req.amount / max(user["balance"], 1)
@@ -169,11 +170,11 @@ def score(req: ScoreRequest):
     if phone_pressure(p):
         signals.append((2, "Unusual hesitation and app switching during this payment"))
 
-    points, n = sum(s[0] for s in signals), len(signals)
-    x = np.array([[ratio, new_payee, p.call_active, a.fd_broken_24h,
-                   a.prior_large_transfers_6h, a.limit_raised_24h, share]], dtype=float)
-    prob = float(MODEL.predict_proba(x)[0, 1])
+    x = [ratio, new_payee, p.call_active, a.fd_broken_24h, a.prior_large_transfers_6h, a.limit_raised_24h, share]
+    return sum(sg[0] for sg in signals), len(signals), [sg[1] for sg in signals], x, user
 
+
+def decide(points: int, n: int, prob: float, amount: float) -> int:
     # Rule guard: no single signal can raise an alert.
     tier = 0
     if points >= 5 and n >= 2:
@@ -183,9 +184,27 @@ def score(req: ScoreRequest):
     # Model refines within the guard.
     if tier == 2 and prob < 0.05:
         tier = 1                                   # looks like a genuine large payment
-    if tier == 2 and prob >= 0.6 and req.amount >= 100_000:
+    if tier == 2 and prob >= 0.6 and amount >= 100_000:
         tier = 3                                   # highest risk and amount -> human review
-    return tier, prob, [s[1] for s in signals] if tier > 0 else [], user
+    return tier
+
+
+def score(req: ScoreRequest):
+    points, n, reasons, x, user = rule_part(req)
+    prob = float(MODEL.predict_proba(np.array([x], dtype=float))[0, 1])
+    tier = decide(points, n, prob, req.amount)
+    return tier, prob, reasons if tier > 0 else [], user
+
+
+def score_many(reqs):
+    """Batch version used by the evaluation (same logic as score)."""
+    parts = [rule_part(r) for r in reqs]
+    probs = MODEL.predict_proba(np.array([pt[3] for pt in parts], dtype=float))[:, 1]
+    out = []
+    for r, (points, n, reasons, x, user), pr in zip(reqs, parts, probs):
+        t = decide(points, n, float(pr), r.amount)
+        out.append((t, float(pr), reasons if t > 0 else []))
+    return out
 
 
 @app.get("/")
@@ -308,3 +327,153 @@ def guardian(case_id: str):
             f'<p>Please call {who} directly now. Scammers often pose as police and ask victims to stay on the call.</p>'
             f'<p style="color:#4A5468">You can only see this alert. You cannot see amounts or move money.</p></div>')
     return PAGE.format(title="Guardian alert", body=body)
+
+
+# ------------------------------------------------------------ evaluation
+# Fresh synthetic test set, generated with a different seed from training (never seen by the model).
+# Phone-behaviour distributions are our assumptions until the volunteer study measures them.
+def make_test_set(seed=2026, n_normal=20_000, n_life=300, n_scam=300, n_adaptive=75):
+    rng = np.random.default_rng(seed)
+    usual = DEMO_USERS["demo_user_1"]["usual_amount"]
+    rows = []   # (kind, label, ScoreRequest)
+
+    def req(ratio, new_p, fd, limit, prior, call, sess, pause, pasted, bursts, switches):
+        return ScoreRequest(
+            user_id="demo_user_1", amount=float(round(ratio * usual)),
+            account=Account(payee_added_minutes_ago=int(rng.integers(5, 600)) if new_p else 100_000,
+                            fd_broken_24h=bool(fd), limit_raised_24h=bool(limit),
+                            prior_large_transfers_6h=int(prior)),
+            phone=Phone(call_active=bool(call), session_seconds=int(max(sess, 5)),
+                        avg_field_pause_ms=int(max(pause, 0)), account_number_pasted=bool(pasted),
+                        account_number_bursts=int(bursts), app_switches=int(switches)))
+
+    for _ in range(n_normal):
+        rows.append(("normal", 0, req(np.exp(rng.normal(0, 0.8)), rng.random() < 0.12, rng.random() < 0.002,
+                                      rng.random() < 0.003, 0, rng.random() < 0.04, rng.lognormal(np.log(60), 0.5),
+                                      rng.normal(1200, 500), rng.random() < 0.3, rng.integers(1, 3),
+                                      rng.poisson(0.3))))
+    for i in range(n_life):
+        rows.append(("genuine_large", 0, req(np.exp(rng.normal(np.log(40), 0.7)), rng.random() < 0.7,
+                                             rng.random() < 0.4, rng.random() < 0.3,
+                                             (i % 3) if rng.random() < 0.3 else 0, rng.random() < 0.15,
+                                             rng.lognormal(np.log(120), 0.5), rng.normal(1800, 600),
+                                             rng.random() < 0.4, rng.integers(1, 4), rng.poisson(0.6))))
+    for _ in range(n_scam):
+        call = rng.random() < 0.65
+        rows.append(("scam" if call else "scam_call_hidden", 1,
+                     req(np.exp(rng.normal(np.log(40), 0.8)), rng.random() < 0.95, rng.random() < 0.55,
+                         rng.random() < 0.35, rng.integers(0, 6), call,
+                         rng.lognormal(np.log(300 if call else 200), 0.4), rng.normal(3500 if call else 2500, 1200),
+                         rng.random() < 0.3, rng.integers(2, 6), rng.poisson(2.5 if call else 1.5))))
+    for _ in range(n_adaptive):
+        rows.append(("scam_adaptive", 1, req(np.exp(rng.normal(np.log(6), 0.4)), rng.random() < 0.95,
+                                             rng.random() < 0.55, rng.random() < 0.35, 0, False,
+                                             rng.lognormal(np.log(150), 0.4), rng.normal(2200, 800),
+                                             rng.random() < 0.3, rng.integers(1, 4), rng.poisson(1.0))))
+    return rows
+
+
+def metrics(rows, results):
+    def rate(sel, cond):
+        idx = [i for i, r in enumerate(rows) if sel(r)]
+        return (round(sum(cond(results[i]) for i in idx) / len(idx), 4), len(idx)) if idx else (None, 0)
+    flagged = lambda res: res[0] >= 1
+    held = lambda res: res[0] >= 2
+    scam = lambda r: r[1] == 1
+    genuine = lambda r: r[1] == 0
+    n_flag = sum(flagged(res) for res in results)
+    tp_flag = sum(flagged(res) and r[1] == 1 for r, res in zip(rows, results))
+    n_held = sum(held(res) for res in results)
+    tp_held = sum(held(res) and r[1] == 1 for r, res in zip(rows, results))
+    out = {
+        "all_scams_flagged_rate": rate(scam, flagged),
+        "scam_held_rate": rate(scam, held),
+        "genuine_false_alarm_rate": rate(genuine, flagged),
+        "genuine_false_hold_rate": rate(genuine, held),
+        "precision_flagged": round(tp_flag / n_flag, 4) if n_flag else None,
+        "precision_held": round(tp_held / n_held, 4) if n_held else None,
+    }
+    for kind in ("normal", "genuine_large", "scam", "scam_call_hidden", "scam_adaptive"):
+        out[f"flagged_rate_{kind}"] = rate(lambda r, k=kind: r[0] == k, flagged)
+    return out
+
+
+EVAL_CACHE = {}
+
+
+def run_eval():
+    if "result" not in EVAL_CACHE:
+        rows = make_test_set()
+        results = score_many([r[2] for r in rows])
+        missed = [(r, res) for r, res in zip(rows, results) if r[1] == 1 and res[0] == 0][:5]
+        false_alarms = [(r, res) for r, res in zip(rows, results) if r[1] == 0 and res[0] >= 2][:5]
+        EVAL_CACHE["result"] = (metrics(rows, results), missed, false_alarms, len(rows))
+    return EVAL_CACHE["result"]
+
+
+@app.get("/metrics.json")
+def metrics_json():
+    m, missed, fa, n = run_eval()
+    return {"test_payments": n, "seed": 2026, "training_seed": 7, "metrics": m}
+
+
+def describe(req: ScoreRequest) -> str:
+    a, p = req.account, req.phone
+    bits = [f"Rs {req.amount:,.0f}"]
+    if p.call_active: bits.append("on call")
+    if a.payee_added_minutes_ago < 1440: bits.append("new payee")
+    if a.fd_broken_24h: bits.append("FD broken")
+    if a.limit_raised_24h: bits.append("limit raised")
+    if a.prior_large_transfers_6h: bits.append(f"{a.prior_large_transfers_6h} prior large")
+    bits.append(f"pause {p.avg_field_pause_ms} ms, {p.app_switches} app switches")
+    return ", ".join(bits)
+
+
+@app.get("/metrics", response_class=HTMLResponse)
+def metrics_page():
+    m, missed, fa, n = run_eval()
+    pct = lambda v: "–" if v is None else f"{v * 100:.1f}%"
+    labels = [
+        ("all_scams_flagged_rate", "Scam payments flagged (warning or hold)"),
+        ("scam_held_rate", "Scam payments held"),
+        ("genuine_false_alarm_rate", "Genuine payments wrongly flagged"),
+        ("genuine_false_hold_rate", "Genuine payments wrongly held"),
+        ("flagged_rate_genuine_large", "Genuine LARGE payments flagged (hard case)"),
+        ("flagged_rate_scam_call_hidden", "Scams flagged when the call is on another device"),
+        ("flagged_rate_scam_adaptive", "Scams flagged when victim is coached to pay small and slow"),
+    ]
+    rows = "".join(f"<tr><td>{t}</td><td>{pct(m[k][0])}</td><td>{m[k][1]:,}</td></tr>" for k, t in labels)
+    rows += f'<tr><td>Precision of holds (share of holds that are real scams)</td><td>{pct(m["precision_held"])}</td><td></td></tr>'
+    miss = "".join(f"<li>{html.escape(r[0])}: {html.escape(describe(r[2]))}</li>" for r, res in missed) or "<li>None</li>"
+    fal = "".join(f"<li>{html.escape(r[0])}: {html.escape(describe(r[2]))} → {html.escape('; '.join(res[2]))}</li>"
+                  for r, res in fa) or "<li>None</li>"
+    body = (f"<h1>Thehro – measured accuracy</h1>"
+            f"<p>{n:,} fresh synthetic payments (seed 2026). The model was trained on a different synthetic set "
+            f"(seed 7) and never saw these. Full decision = rule guard + model.</p>"
+            f"<table><tr><th>Measure</th><th>Result</th><th>Payments</th></tr>{rows}</table>"
+            f"<h2>Failure cases: scams we missed</h2><ul>{miss}</ul>"
+            f"<h2>Failure cases: genuine payments we held</h2><ul>{fal}</ul>"
+            f"<p><b>Limits:</b> all data is synthetic and the phone-behaviour patterns are our assumptions until "
+            f"the volunteer study. Precision on real data would be lower because real scams are rarer.</p>"
+            f"<p>Batch test: POST a list of cases to <code>/evaluate</code> (see <a href='/docs'>/docs</a>).</p>")
+    return PAGE.format(title="Measured accuracy", body=body).replace('<meta http-equiv="refresh" content="5">', "")
+
+
+class LabelledCase(BaseModel):
+    case: ScoreRequest
+    label: int | None = None     # 1 = scam, 0 = genuine (optional)
+    name: str = ""
+
+
+@app.post("/evaluate")
+def evaluate(cases: list[LabelledCase]):
+    """Score a batch of test cases (e.g. the jury's kit). If labels are given, also returns metrics."""
+    results = score_many([c.case for c in cases])
+    preds = [{"name": c.name, "label": c.label, "tier": t, "decision": LABELS[t], "score": round(pr, 3),
+              "reasons": rs} for c, (t, pr, rs) in zip(cases, results)]
+    labelled = [(c, r) for c, r in zip(cases, results) if c.label is not None]
+    summary = None
+    if labelled:
+        rows = [(c.name or "case", c.label, c.case) for c, _ in labelled]
+        summary = metrics(rows, [r for _, r in labelled])
+    return {"predictions": preds, "metrics": summary}
