@@ -234,6 +234,8 @@ fun ThehroApp() {
                     if (tier == 2) Text("Held for ${r.optInt("hold_minutes", 240) / 60} hours. " +
                             "End your call, then confirm again. Your guardian has been notified.")
                     else Text("A bank officer will review this payment before it is released.")
+                    ToggleRow("Simulate active call (emulator only)", simulateCall) { simulateCall = it }
+                    Text("Call active now: ${if (callNow()) "yes" else "no"}", color = Color.Gray)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         OutlinedButton(onClick = { resetForm() }) { Text("Cancel payment") }
                         Button(onClick = {
