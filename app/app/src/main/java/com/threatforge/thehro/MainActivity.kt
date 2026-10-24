@@ -132,8 +132,9 @@ fun ThehroApp() {
         Signals.reset()
     }
 
+    Column(Modifier.fillMaxSize().imePadding()) {
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
+        Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("Thehro Bank (demo)", fontSize = 26.sp, fontWeight = FontWeight.Bold)
@@ -141,6 +142,11 @@ fun ThehroApp() {
         val r = result
         if (r == null) {
             // ------------------------- Transfer screen -------------------------
+            Text("Volunteer test (leave empty for normal use)", fontWeight = FontWeight.SemiBold)
+            OutlinedTextField(volunteerId, { volunteerId = it }, label = { Text("Volunteer ID, e.g. V1") },
+                modifier = Modifier.fillMaxWidth())
+            ToggleRow("This run is under pressure (scripted call)", pressuredRun) { pressuredRun = it }
+            HorizontalDivider()
             Text("Send money", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             OutlinedTextField(payee, { payee = it; Signals.onInput() }, label = { Text("Payee name") },
                 modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) Signals.onFieldFocus() })
@@ -167,44 +173,6 @@ fun ThehroApp() {
                 modifier = Modifier.fillMaxWidth())
 
 
-            Button(
-                enabled = !busy && amount.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth(),
-                onClick = {
-                    busy = true; status = ""
-                    val body = JSONObject()
-                        .put("user_id", "demo_user_1")
-                        .put("payee_id", payee.ifBlank { "unknown" })
-                        .put("amount", amount.toLongOrNull() ?: 0L)
-                        .put("account", JSONObject()
-                            .put("payee_added_minutes_ago", if (newPayee) 12 else 100000)
-                            .put("fd_broken_24h", fdBroken)
-                            .put("limit_raised_24h", limitRaised)
-                            .put("prior_large_transfers_6h", priorLarge.toIntOrNull() ?: 0))
-                        .put("phone", JSONObject()
-                            .put("call_active", callNow())
-                            .put("session_seconds", Signals.sessionSeconds())
-                            .put("avg_field_pause_ms", Signals.avgPauseMs())
-                            .put("account_number_pasted", Signals.accountPasted)
-                            .put("account_number_bursts", Signals.accountBursts)
-                            .put("app_switches", Signals.appSwitches))
-                        .put("study", JSONObject()
-                            .put("volunteer", volunteerId.trim())
-                            .put("condition", if (pressuredRun) "pressured" else "normal"))
-                    scope.launch {
-                        try { result = postJson("$serverUrl/score", body) }
-                        catch (e: Exception) { status = "Could not reach server: ${e.message}" }
-                        busy = false
-                    }
-                }
-            ) { Text(if (busy) "Checking…" else "Send money") }
-            if (status.isNotEmpty()) Text(status, color = Color(0xFFB0401A))
-            Text("Call active now: ${if (callNow()) "yes" else "no"}", color = Color.Gray)
-            HorizontalDivider()
-            Text("Volunteer test (leave empty for normal use)", fontWeight = FontWeight.SemiBold)
-            OutlinedTextField(volunteerId, { volunteerId = it }, label = { Text("Volunteer ID, e.g. V1") },
-                modifier = Modifier.fillMaxWidth())
-            ToggleRow("This run is under pressure (scripted call)", pressuredRun) { pressuredRun = it }
         } else {
             // -------------------------- Result screen --------------------------
             val tier = r.optInt("tier", 0)
@@ -255,6 +223,45 @@ fun ThehroApp() {
             }
             if (status.isNotEmpty()) Text(status, fontWeight = FontWeight.SemiBold)
         }
+    }
+    if (result == null) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Button(
+                    enabled = !busy && amount.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        busy = true; status = ""
+                        val body = JSONObject()
+                            .put("user_id", "demo_user_1")
+                            .put("payee_id", payee.ifBlank { "unknown" })
+                            .put("amount", amount.toLongOrNull() ?: 0L)
+                            .put("account", JSONObject()
+                                .put("payee_added_minutes_ago", if (newPayee) 12 else 100000)
+                                .put("fd_broken_24h", fdBroken)
+                                .put("limit_raised_24h", limitRaised)
+                                .put("prior_large_transfers_6h", priorLarge.toIntOrNull() ?: 0))
+                            .put("phone", JSONObject()
+                                .put("call_active", callNow())
+                                .put("session_seconds", Signals.sessionSeconds())
+                                .put("avg_field_pause_ms", Signals.avgPauseMs())
+                                .put("account_number_pasted", Signals.accountPasted)
+                                .put("account_number_bursts", Signals.accountBursts)
+                                .put("app_switches", Signals.appSwitches))
+                            .put("study", JSONObject()
+                                .put("volunteer", volunteerId.trim())
+                                .put("condition", if (pressuredRun) "pressured" else "normal"))
+                        scope.launch {
+                            try { result = postJson("$serverUrl/score", body) }
+                            catch (e: Exception) { status = "Could not reach server: ${e.message}" }
+                            busy = false
+                        }
+                    }
+                ) { Text(if (busy) "Checking…" else "Send money") }
+                if (status.isNotEmpty()) Text(status, color = Color(0xFFB0401A))
+                Text("Call active now: ${if (callNow()) "yes" else "no"}", color = Color.Gray)
+        }
+    }
     }
 }
 
