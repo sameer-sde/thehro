@@ -1,84 +1,214 @@
-# Thehro – coerced-payer detection for digital arrest scams
+# Thehro – stop the payment, not the customer
 
-**Team ThreatForge · RAKSHAM AI Cybersecurity Hackathon (IIT Delhi) · Track 02: AI-Driven Scam Pattern Recognition**
+**Coerced-payer detection for digital arrest scams**
+
+Team ThreatForge · RAKSHAM AI Cybersecurity Hackathon (IIT Delhi × Amazon) · Track 02: AI-Driven Scam Pattern Recognition
 
 Sameer Ahmed (team lead, Osmania University) · Bhargab Das · Bhukya Narender (IIT Jodhpur)
 
-> A bank-app safety layer that detects when a customer is under coercion during a digital arrest scam and holds only that payment until someone outside the call is involved.
+> *Thehro* (ठहरो) means "wait". It's a safety layer for a bank's app. It notices when a customer is paying **under pressure from a caller**, holds only that payment, and brings in someone outside the call.
+
+---
 
 ## The problem
 
-In a digital arrest scam, a fake police or CBI officer keeps the victim on a call (voice or video) for hours and pressures them into transferring their savings. The victim pays from their own phone with their own PIN, so the bank sees a normal, authorised payment. Existing controls look at the receiving account or delay every payment for everyone.
+In a **digital arrest scam**, a fake police, CBI or customs officer keeps the victim on a voice or video call, sometimes for hours, and pushes them to "verify" their savings by transferring money. The victim pays from their own phone with their own PIN, so the bank sees a normal, authorised payment.
 
-Thehro looks at the **payer**: is the person paying acting under pressure right now?
+Most fraud controls look at the receiving account or slow down everyone's payments. **Thehro looks at the payer.** Is this person acting under pressure right now?
 
-## How it works
+---
 
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph PHONE["📱 Customer's phone · bank app + Thehro SDK"]
+        A1["Call active? (yes/no only)"]
+        A2["Typing pauses · bursts · paste · app switches"]
+        A3["On-device pressure model<br/>(score 0–1)"]
+        A4["Account number → SHA-256 hash"]
+        A2 --> A3
+    end
+
+    subgraph BANK["🏦 Bank's servers · Thehro scoring service"]
+        B1["Bank events<br/>FD broken · new payee · limit raised<br/>large transfers · amount vs usual"]
+        B2["Personal baseline<br/>(this user's normal pace)"]
+        B3["Mule network check<br/>(same account in other held payments)"]
+        B4["Rule guard<br/>no single signal can alert"]
+        B5["Gradient-boosted model"]
+        B6{"Decision<br/>T0 · T1 · T2 · T3"}
+        B1 --> B4
+        B2 --> B4
+        B3 --> B4
+        B4 --> B6
+        B5 --> B6
+    end
+
+    subgraph PEOPLE["👥 Response"]
+        C1["Customer<br/>warning / hold screen<br/>spoken alert · Hindi · safety check"]
+        C2["Guardian<br/>alert, no amounts"]
+        C3["Bank analyst<br/>review queue · release / keep"]
+        C4["Report pack<br/>1930 · cybercrime.gov.in"]
+    end
+
+    A1 --> B4
+    A3 --> B4
+    A4 --> B3
+    B6 --> C1
+    B6 --> C2
+    B6 --> C3
+    C3 --> C4
 ```
- Customer's phone (bank app)              Bank-side scoring server               People
- ───────────────────────────              ─────────────────────────              ──────
- call active? (yes/no only)    ──┐
- pause between fields            ├──►  rule guard (no single signal alerts)  ──► Customer: warning / hold screen
- account no. typed in bursts     │     + gradient-boosted model                  Guardian: alert page (no amounts)
- or pasted, app switches       ──┘     + 24-hour account events                  Analyst: review queue, release
-                                        (FD broken, new payee, amount            Evidence log (cases.jsonl)
-                                         vs usual, repeat transfers)
+
+### One payment, end to end
+
+```mermaid
+sequenceDiagram
+    participant U as Customer (on a scam call)
+    participant P as Bank app + Thehro
+    participant S as Scoring service
+    participant G as Guardian
+    participant A as Bank analyst
+
+    U->>P: Enters payee, account, ₹2,50,000
+    P->>P: Measures timings, on-device score, hashes account
+    P->>S: POST /score (signals only, no text or audio)
+    S->>S: Bank events + baseline + mule check + model
+    S-->>P: T2 HOLD + reasons
+    P-->>U: "Payment on hold" (spoken aloud, Hindi/English)
+    S-->>G: Guardian alert
+    U->>P: Safety check: "Someone on the phone is telling me what to do" → Yes
+    P->>S: POST /checkin → escalated to T3
+    S-->>A: Case appears in the analyst queue
+    A->>A: Reviews, opens report pack (1930)
+    U->>P: Ends the call, confirms
+    A->>S: Release (or keep holding)
 ```
 
-**Tiers**
+---
 
-| Tier | When | What happens |
+## Features
+
+| | Feature | What it does |
 |---|---|---|
-| T0 Pass | fewer than 2 signals | nothing, payment proceeds |
-| T1 Warn | 2+ signals, medium score | one warning with plain-language reasons; user continues or cancels |
-| T2 Hold | 3+ signals, high score | payment held; release only after re-confirming with **no call active**; guardian alerted |
-| T3 Review | highest score and amount ≥ Rs 1,00,000 | held until a bank analyst reviews and releases |
+| 📞 | **Call detection** | Checks whether a normal or VoIP (WhatsApp) call is active during the payment. Yes/no only, never who is calling |
+| ⌨️ | **Behaviour signals** | Pauses between fields, the account number typed in bursts (someone reading it out) or pasted, switching apps mid-payment |
+| 🧠 | **On-device pressure model** | A small logistic model runs **inside the app**. Only its score leaves the phone |
+| 👤 | **Personal baseline** | After 3 ordinary payments, hesitation is compared with *this user's* normal pace, not a global average |
+| 🏦 | **Bank-side events** | FD broken today, new payee, transfer limit raised, repeat large transfers, amount vs usual, share of balance |
+| 🕸️ | **Mule account detection** | The account number is hashed on the phone. If the same account already received other held payments, it's flagged across customers |
+| 🛡️ | **Rule guard + ML model** | No single signal can raise an alert. A gradient-boosted model refines the tier within the guard |
+| ⏸️ | **Tiered response** | Pass, warn, hold until the call ends, or analyst review. Only the risky payment is touched |
+| 🔊 | **Spoken alert** | The hold message is read aloud, so a victim still on the call hears it |
+| 🇮🇳 | **Hindi warning screen** | Title, reasons and safety advice switch to Hindi in one tap |
+| ❓ | **Safety check** | Three yes/no questions ("Did they say you are under arrest?"). Any "yes" sends the payment to a bank officer |
+| 👨‍👩‍👧 | **Guardian alert** | A family member gets an alert (no amounts, can't move money) and a one-tap message |
+| 🧑‍💼 | **Analyst queue** | Live dashboard with counts, every held case, reasons, release / keep |
+| 📄 | **Report pack** | A ready-to-file summary for the 1930 helpline / cybercrime.gov.in, plus a one-tap 1930 dialer in the app |
+| 📊 | **Built-in evaluation** | `/metrics` scores 20,675 held-out payments and lists failure cases; `/evaluate` scores any labelled batch |
 
-The model can lower a T2 to a T1 when the pattern looks like a genuine large payment, and raise it to T3 for the highest-risk, largest cases.
+### Decision tiers
 
-## What is real and what is simulated
+| Tier | When | What the customer sees |
+|---|---|---|
+| **T0 Pass** | Few or no signals | Nothing. Payment goes through |
+| **T1 Warn** | 2+ signals, medium risk | Plain-language reasons, safety check, continue or cancel |
+| **T2 Hold** | 3+ signals, high risk | Payment held, spoken alert, guardian alerted. Released only after confirming with **no call active** |
+| **T3 Review** | Highest risk and ≥ ₹1,00,000, or the customer says a caller is directing them | Held until a bank analyst reviews it |
 
-| Part | Status |
+---
+
+## Results
+
+### Held-out synthetic test (`GET /metrics`)
+
+20,675 fresh payments (seed 2026) the model never saw (training seed 7), scored with the full decision logic.
+
+| Metric | Result |
 |---|---|
-| Call-active detection (`AudioManager` mode: normal calls and VoIP) | Built. Emulator uses a "Simulate call" switch because it cannot place calls |
-| Typing pauses, bursts, paste, app switches | Built (timings and counts only, no text) |
-| Bank-side events (FD broken, new payee, limit raised, prior transfers) | **Simulated** with demo controls; no real bank connection |
-| Scoring: rule guard + gradient-boosted model | Built; model trained on **synthetic** data |
-| Phone "pressure" signal | Rule on fixed thresholds (2+ of: pause > 3 s, account typed in 3+ bursts or pasted, 2+ app switches, session > 5 min). The planned on-device ONNX model was cut: there is no real behaviour data to train it on yet |
-| Guardian alert, analyst review, evidence log | Built (web pages served by the server) |
-| 4-hour cooling period | In the design; **skipped in demo mode** so the release can be shown live |
+| Scam payments flagged (warn or hold) | **92.8%** |
+| Scam payments held | **64.0%** |
+| Genuine payments flagged | **1.1%** |
+| Genuine payments held | **0.17%** |
+| Holds that were real scams (precision) | **87.6%** |
+| Scams with the call hidden, still flagged | 95.0% |
+| Adaptive scams (small amounts, no call), flagged | 70.7% |
+| **Main weakness:** genuine large payments flagged | 70.7% |
 
-## Measured accuracy
+### Volunteer pilot (`GET /study/summary`)
 
-`GET /metrics` scores ~20,675 fresh synthetic payments (seed 2026) that the model never trained on (training seed 7), using the full decision (rules + model), and lists failure cases.
+2 team members, 4 runs: the same ₹5,000 payment made calmly, then while a teammate played a "CBI officer" reading the account number aloud and rushing them.
 
-Latest run: 92.8% of scam payments flagged, 64% held; 1.1% of genuine payments flagged, 0.17% held; 87.6% of holds were real scams. Main weakness: 70.7% of genuine **large** payments (e.g. property purchase) are flagged.
+| Average per run | Normal | Under pressure |
+|---|---|---|
+| Pause between fields | 4.1 s | 20.4 s |
+| Account number typed in bursts | 1.5 | 3.0 |
+| App switches | 0 | 2.0 |
+| Session length | 68 s | 170 s |
+| On-device pressure score | 0.05 | 0.80 |
 
-**Limits:** all data is synthetic and the phone-behaviour patterns are assumptions until the volunteer study measures them. Precision on real data would be lower because real scams are rarer.
+The on-device model flagged 1 of 2 pressured runs and 0 of 2 normal runs.
 
-`POST /evaluate` scores a batch of labelled test cases (e.g. a jury test kit) and returns decisions, reasons and metrics.
+**Limits, stated plainly:** the test data is synthetic, so real-world precision would be lower because real scams are rarer. The on-device model is trained on synthetic sessions. The volunteer pilot is tiny and role-played. Bank events are simulated with demo controls. A bank pilot in shadow mode is the next step.
 
-## Privacy and safeguards
+---
 
-- No call audio, call logs, phone numbers, contacts, messages or typed text are read or stored. The phone sends only a call yes/no, timings and counts.
-- No single signal can raise an alert. Holds are reversible; no automatic blocking or accusation.
-- Every alert gives plain-language reasons, never a bare score.
-- The guardian sees an alert only: no amounts, cannot move money.
-- Human analyst review for the highest-risk cases.
+## Privacy by design
+
+- **Never collected:** call audio, call logs, phone numbers, contacts, messages, typed text.
+- **The account number leaves the phone only as a SHA-256 hash**, used to spot mule accounts.
+- The phone sends only a call yes/no, timings, counts and the on-device score.
+- **No single signal acts alone.** Holds are reversible, with no automatic blocking and no accusation.
+- Every alert explains itself in plain language, never with a bare score.
+- The guardian sees an alert only: no amounts, and they can't move money.
+- A human analyst reviews the highest-risk cases.
+
+---
+
+## Repository layout
+
+```
+thehro/
+├── app/                          Android app (Kotlin, Jetpack Compose, min SDK 26)
+│   └── app/src/main/java/com/threatforge/thehro/MainActivity.kt
+│                                 signals, on-device model, transfer + result screens
+├── server/
+│   ├── main.py                   FastAPI scoring service, model, pages, evaluation
+│   └── requirements.txt
+├── ondevice/
+│   └── train.py                  trains the on-device pressure model, prints its weights
+└── README.md
+```
+
+### API
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /score` | Score a payment and return the tier, reasons (English and Hindi), guardian and case ID |
+| `POST /checkin` | The customer's safety-check answers. Any "yes" escalates to analyst review |
+| `POST /confirm` | Re-confirm a held payment (refused while a call is active) |
+| `GET /analyst` | Analyst dashboard and queue, release / keep |
+| `GET /guardian/{case_id}` | Guardian alert page |
+| `GET /report/{case_id}` | Report pack for 1930 / cybercrime.gov.in |
+| `GET /baseline/{user_id}` | The user's learned normal pace |
+| `GET /metrics` · `/metrics.json` | Held-out evaluation with failure cases |
+| `POST /evaluate` | Score a labelled batch (e.g. a jury test kit) |
+| `GET /study/summary` | Volunteer study comparison |
+| `GET /docs` | Interactive API docs |
+
+---
 
 ## Run it
 
-**Server** (Python 3.11+):
+**1. Server** (Python 3.11+)
 
 ```bash
-pip3 install fastapi uvicorn scikit-learn pandas numpy
 cd server
-python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
+pip3 install -r requirements.txt
+uvicorn main:app --port 8000
 ```
 
-Pages: `/analyst` (review queue), `/guardian/<case_id>`, `/metrics`, `/study/summary`, `/docs` (API).
-
-**App** (Android Studio, min SDK 26): open `app/`, run on an emulator or phone, then forward the port:
+**2. App** (Android Studio): open `app/`, run on an emulator or phone, then forward the port:
 
 ```bash
 adb reverse tcp:8000 tcp:8000
@@ -86,15 +216,31 @@ adb reverse tcp:8000 tcp:8000
 
 The app's server URL defaults to `http://localhost:8000`.
 
-**Demo:** normal payment (Rs 4,000, all switches off) passes. Scam payment (Rs 2,50,000, FD broken, new payee, limit raised, simulate call, 1 prior transfer) is held. Confirming during the call is refused; the guardian page and analyst queue show the case; turning off the call and confirming releases it.
+**3. Demo journey**
 
-## Volunteer study
+1. **Normal payment** (₹6,000, all switches off): passes.
+2. **Scam payment** (₹2,50,000, FD broken + new payee + limit raised + simulate call, 1 large transfer): **held**, reasons shown and spoken.
+3. Tap **हिंदी** to see the Hindi screen. Answer the **safety check** "Yes" and it goes to analyst review.
+4. Open `/analyst` to see the case, then **Report pack**.
+5. Turn off the call and confirm, or release from the analyst page: the payment goes through.
+6. Send ₹6,000 to the **same account**: flagged as a **possible mule account**.
 
-Entering a Volunteer ID in the app logs that run's timings to `server/study.csv` (no personal data). `GET /study/summary` compares normal and pressured runs.
+*Demo mode skips the 4-hour cooling period so the release can be shown live. Bank events are simulated with the demo switches.*
+
+---
+
+## Deployment path
+
+- **Who runs it:** the bank's fraud-risk team. The digital-banking team owns the app screens.
+- **How it plugs in:** an SDK inside the bank's existing app, plus a scoring service on the bank's own servers, called before payment authorisation.
+- **Rollout:** shadow mode (score silently), then warnings only, then holds for opted-in senior citizens, then scale with analyst capacity.
+- **Next:** retrain the server and on-device models on consented real sessions and confirmed fraud labels.
+
+---
 
 ## Disclosures
 
-- **AI assistance:** Claude (Anthropic) was used for research, drafting and writing code during the hackathon. No other AI tool was used.
+- **AI assistance:** an AI coding assistant (Claude, Anthropic) was used during the hackathon, as declared on the disclosure form. No other AI tool was used.
 - **Pre-existing code:** the Round 1 evaluation script (synthetic data generator and rule scoring) was written before the finale and declared on the pre-event disclosure form. All product code in this repository was written on-site.
 - **Data:** fully synthetic, generated by our own code. No bank, customer or platform data.
-- **Libraries:** FastAPI, Uvicorn, scikit-learn, NumPy, pandas, Jetpack Compose (Android).
+- **Libraries:** FastAPI, Uvicorn, scikit-learn, NumPy, pandas, Jetpack Compose.
