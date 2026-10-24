@@ -7,12 +7,15 @@ import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -134,43 +137,49 @@ fun ThehroApp() {
 
     Column(Modifier.fillMaxSize().imePadding()) {
     Column(
-        Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text("Thehro Bank (demo)", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        Text("Thehro Bank (demo)", fontSize = 22.sp, fontWeight = FontWeight.Bold)
 
         val r = result
         if (r == null) {
             // ------------------------- Transfer screen -------------------------
-            Text("Volunteer test (leave empty for normal use)", fontWeight = FontWeight.SemiBold)
-            OutlinedTextField(volunteerId, { volunteerId = it }, label = { Text("Volunteer ID, e.g. V1") },
-                modifier = Modifier.fillMaxWidth())
-            ToggleRow("This run is under pressure (scripted call)", pressuredRun) { pressuredRun = it }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(volunteerId, { volunteerId = it }, label = { Text("Volunteer ID (test only)") },
+                    singleLine = true, modifier = Modifier.weight(1f))
+                Chip("Under pressure", pressuredRun) { pressuredRun = !pressuredRun }
+            }
             HorizontalDivider()
-            Text("Send money", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-            OutlinedTextField(payee, { payee = it; Signals.onInput() }, label = { Text("Payee name") },
+            OutlinedTextField(payee, { payee = it; Signals.onInput() }, label = { Text("Payee name") }, singleLine = true,
                 modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) Signals.onFieldFocus() })
             OutlinedTextField(account, { Signals.onAccountChange(account, it); account = it },
-                label = { Text("Account number") },
+                label = { Text("Account number") }, singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) Signals.onFieldFocus() })
             OutlinedTextField(amount, { amount = it.filter { c -> c.isDigit() }; Signals.onInput() },
-                label = { Text("Amount (Rs)") },
+                label = { Text("Amount (Rs)") }, singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth().onFocusChanged { if (it.isFocused) Signals.onFieldFocus() })
 
             HorizontalDivider()
-            Text("Demo controls (simulated bank events)", fontWeight = FontWeight.SemiBold)
-            ToggleRow("Fixed deposit broken today", fdBroken) { fdBroken = it }
-            ToggleRow("Payee is new (added minutes ago)", newPayee) { newPayee = it }
-            ToggleRow("Transfer limit raised today", limitRaised) { limitRaised = it }
-            ToggleRow("Simulate active call (emulator only)", simulateCall) { simulateCall = it }
-            OutlinedTextField(priorLarge, { priorLarge = it.filter { c -> c.isDigit() } },
-                label = { Text("Large transfers in last 6 hours") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(serverUrl, { serverUrl = it }, label = { Text("Server URL") },
-                modifier = Modifier.fillMaxWidth())
+            Text("Demo controls (simulated bank events) – tap to switch", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Chip("FD broken today", fdBroken, Modifier.weight(1f)) { fdBroken = !fdBroken }
+                Chip("New payee", newPayee, Modifier.weight(1f)) { newPayee = !newPayee }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Chip("Limit raised today", limitRaised, Modifier.weight(1f)) { limitRaised = !limitRaised }
+                Chip("Simulate call", simulateCall, Modifier.weight(1f)) { simulateCall = !simulateCall }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(priorLarge, { priorLarge = it.filter { c -> c.isDigit() } },
+                    label = { Text("Large transfers 6h") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1f))
+                OutlinedTextField(serverUrl, { serverUrl = it }, label = { Text("Server URL") },
+                    singleLine = true, modifier = Modifier.weight(1.6f))
+            }
 
 
         } else {
@@ -270,5 +279,18 @@ fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label, modifier = Modifier.weight(1f).padding(top = 12.dp))
         Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+@Composable
+fun Chip(label: String, on: Boolean, modifier: Modifier = Modifier, onToggle: () -> Unit) {
+    Box(
+        modifier
+            .background(if (on) Color(0xFF6750A4) else Color(0xFFE7E0EC), RoundedCornerShape(18.dp))
+            .clickable { onToggle() }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text((if (on) "✓ " else "") + label, color = if (on) Color.White else Color(0xFF1D1B20), fontSize = 14.sp)
     }
 }
