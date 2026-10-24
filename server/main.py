@@ -133,16 +133,46 @@ def log_study(req, tier: int):
 
 
 # ------------------------------------------------------------------ scoring
-def phone_pressure(p: Phone) -> bool:
-    """Behaviour signal: 2+ of these in one session (heuristic until the on-device model is trained)."""
-    hits = [p.avg_field_pause_ms > 3000,
-            p.account_number_pasted or p.account_number_bursts >= 3,
-            p.app_switches >= 2,
-            p.session_seconds > 300]
+# Personal baseline: each user's normal pace, learned from their ordinary (passed) payments.
+BASELINE_FILE = "baselines.json"
+BASELINES: dict[str, list] = json.load(open(BASELINE_FILE)) if os.path.exists(BASELINE_FILE) else {}
+BASELINE_MIN_SESSIONS = 3
+
+
+def baseline_of(user_id: str):
+    hist = BASELINES.get(user_id, [])
+    if len(hist) < BASELINE_MIN_SESSIONS:
+        return None
+    med = lambda k: float(np.median([h[k] for h in hist]))
+    return {"sessions": len(hist), "pause": med("pause"), "bursts": med("bursts"),
+            "switches": med("switches"), "session": med("session")}
+
+
+def update_baseline(user_id: str, p: Phone):
+    hist = BASELINES.setdefault(user_id, [])
+    hist.append({"pause": p.avg_field_pause_ms, "bursts": p.account_number_bursts,
+                 "switches": p.app_switches, "session": p.session_seconds})
+    del hist[:-20]                                  # keep the last 20 normal sessions
+    with open(BASELINE_FILE, "w") as f:
+        json.dump(BASELINES, f)
+
+
+def phone_pressure(p: Phone, base=None) -> bool:
+    """Behaviour signal: 2+ of these in one session. Uses the user's own baseline when known."""
+    if base:
+        hits = [p.avg_field_pause_ms > max(2 * base["pause"], 1500),
+                p.account_number_pasted or p.account_number_bursts >= base["bursts"] + 2,
+                p.app_switches >= base["switches"] + 2,
+                p.session_seconds > max(2 * base["session"], 120)]
+    else:                                           # new user: fixed limits until 3 normal payments
+        hits = [p.avg_field_pause_ms > 3000,
+                p.account_number_pasted or p.account_number_bursts >= 3,
+                p.app_switches >= 2,
+                p.session_seconds > 300]
     return sum(hits) >= 2
 
 
-def rule_part(req: ScoreRequest):
+def rule_part(req: ScoreRequest, use_baseline: bool = True):
     """Rule signals and the model's feature vector for one payment."""
     user = DEMO_USERS.get(req.user_id, DEFAULT_USER)
     ratio = req.amount / max(user["usual_amount"], 1)
@@ -167,8 +197,10 @@ def rule_part(req: ScoreRequest):
         signals.append((2, "Transfer limit raised today"))
     if share >= 0.5:
         signals.append((2, "This sends more than half your balance"))
-    if phone_pressure(p):
-        signals.append((2, "Unusual hesitation and app switching during this payment"))
+    base = baseline_of(req.user_id) if use_baseline else None
+    if phone_pressure(p, base):
+        signals.append((2, "Much slower and more distracted than your usual payments" if base
+                        else "Unusual hesitation and app switching during this payment"))
 
     x = [ratio, new_payee, p.call_active, a.fd_broken_24h, a.prior_large_transfers_6h, a.limit_raised_24h, share]
     return sum(sg[0] for sg in signals), len(signals), [sg[1] for sg in signals], x, user
@@ -197,8 +229,8 @@ def score(req: ScoreRequest):
 
 
 def score_many(reqs):
-    """Batch version used by the evaluation (same logic as score)."""
-    parts = [rule_part(r) for r in reqs]
+    """Batch version used by the evaluation (same logic as score, fixed limits so results are repeatable)."""
+    parts = [rule_part(r, use_baseline=False) for r in reqs]
     probs = MODEL.predict_proba(np.array([pt[3] for pt in parts], dtype=float))[:, 1]
     out = []
     for r, (points, n, reasons, x, user), pr in zip(reqs, parts, probs):
@@ -218,6 +250,8 @@ def score_payment(req: ScoreRequest):
     case_id = "c_" + uuid.uuid4().hex[:6]
     if req.study.volunteer:
         log_study(req, tier)
+    elif tier == 0:
+        update_baseline(req.user_id, req.phone)     # only ordinary payments teach the baseline
     save_case({
         "case_id": case_id, "time": time.strftime("%H:%M:%S"), "user_id": req.user_id,
         "user_name": user["name"], "guardian": user["guardian"], "payee": req.payee_id,
@@ -243,6 +277,13 @@ def confirm(req: ConfirmRequest):
     case["status"] = "released"
     save_case(case)
     return {"status": "released"}
+
+
+@app.get("/baseline/{user_id}")
+def get_baseline(user_id: str):
+    base = baseline_of(user_id)
+    return {"user_id": user_id, "normal_sessions": len(BASELINES.get(user_id, [])),
+            "needed": BASELINE_MIN_SESSIONS, "baseline": base}
 
 
 @app.get("/cases")
