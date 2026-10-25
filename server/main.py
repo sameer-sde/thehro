@@ -278,12 +278,17 @@ def score(req: ScoreRequest):
     return tier, prob, reasons if tier > 0 else [], user
 
 
-def score_many(reqs):
+def score_many(reqs, mode="full"):
     parts = [rule_part(r, use_baseline=False) for r in reqs]
     probs = MODEL.predict_proba(np.array([pt[3] for pt in parts], dtype=float))[:, 1]
     out = []
     for r, (points, n, reasons, x, user), pr in zip(reqs, parts, probs):
-        t = decide(points, n, float(pr), r.amount)
+        if mode == "rules":
+            t = decide(points, n, 0.5, r.amount)
+        elif mode == "model":
+            t = 2 if pr >= 0.5 else (1 if pr >= 0.2 else 0)
+        else:
+            t = decide(points, n, float(pr), r.amount)
         out.append((t, float(pr), reasons if t > 0 else []))
     return out
 
@@ -528,13 +533,29 @@ def run_eval():
         missed = [(r, res) for r, res in zip(rows, results) if r[1] == 1 and res[0] == 0][:5]
         false_alarms = [(r, res) for r, res in zip(rows, results) if r[1] == 0 and res[0] >= 2][:5]
         EVAL_CACHE["result"] = (metrics(rows, results), missed, false_alarms, len(rows))
+        y = np.array([r[1] for r in rows])
+        comp = {}
+        for mode in ("rules", "model", "full"):
+            res = results if mode == "full" else score_many([r[2] for r in rows], mode)
+            m = metrics(rows, res)
+            comp[mode] = {k: m[k] for k in ("all_scams_flagged_rate", "scam_held_rate", "genuine_false_alarm_rate",
+                                            "genuine_false_hold_rate", "precision_flagged", "precision_held")}
+        def confusion(level):
+            pred = np.array([res[0] >= level for res in results])
+            return {"true_positive": int((pred & (y == 1)).sum()), "false_positive": int((pred & (y == 0)).sum()),
+                    "false_negative": int((~pred & (y == 1)).sum()), "true_negative": int((~pred & (y == 0)).sum())}
+        from sklearn.metrics import average_precision_score, roc_auc_score
+        probs = np.array([res[1] for res in results])
+        EVAL_CACHE["extra"] = {"comparison": comp, "confusion_flag": confusion(1), "confusion_hold": confusion(2),
+                               "model_pr_auc": round(float(average_precision_score(y, probs)), 4),
+                               "model_roc_auc": round(float(roc_auc_score(y, probs)), 4)}
     return EVAL_CACHE["result"]
 
 
 @app.get("/metrics.json")
 def metrics_json():
     m, missed, fa, n = run_eval()
-    return {"test_payments": n, "seed": 2026, "training_seed": 7, "metrics": m}
+    return {"test_payments": n, "seed": 2026, "training_seed": 7, "metrics": m, **EVAL_CACHE["extra"]}
 
 
 def describe(req: ScoreRequest) -> str:
@@ -564,13 +585,30 @@ def metrics_page():
     ]
     rows = "".join(f"<tr><td>{t}</td><td>{pct(m[k][0])}</td><td>{m[k][1]:,}</td></tr>" for k, t in labels)
     rows += f'<tr><td>Precision of holds (share of holds that are real scams)</td><td>{pct(m["precision_held"])}</td><td></td></tr>'
+    ex = EVAL_CACHE["extra"]
+    names = {"rules": "Rules only", "model": "Model only", "full": "Thehro (rules + model)"}
+    comp_rows = "".join(
+        f"<tr><td>{names[k]}</td><td>{pct(v['all_scams_flagged_rate'][0])}</td><td>{pct(v['scam_held_rate'][0])}</td>"
+        f"<td>{pct(v['genuine_false_alarm_rate'][0])}</td><td>{pct(v['genuine_false_hold_rate'][0])}</td>"
+        f"<td>{pct(v['precision_held'])}</td></tr>" for k, v in ex["comparison"].items())
+    def cm(c, title):
+        return (f"<table style='width:auto;display:inline-table;margin-right:24px'><tr><th colspan=3>{title}</th></tr>"
+                f"<tr><th></th><th>Predicted scam</th><th>Predicted genuine</th></tr>"
+                f"<tr><th>Real scam</th><td>{c['true_positive']:,}</td><td>{c['false_negative']:,}</td></tr>"
+                f"<tr><th>Real genuine</th><td>{c['false_positive']:,}</td><td>{c['true_negative']:,}</td></tr></table>")
+    extra = (f"<h2>Does the model add value? Comparison on the same test set</h2>"
+             f"<table><tr><th>Approach</th><th>Scams flagged</th><th>Scams held</th><th>Genuine flagged</th>"
+             f"<th>Genuine held</th><th>Precision of holds</th></tr>{comp_rows}</table>"
+             f"<h2>Confusion matrices</h2>{cm(ex['confusion_flag'], 'Flagged (warning or hold)')}"
+             f"{cm(ex['confusion_hold'], 'Held')}"
+             f"<p>Model alone: PR-AUC {ex['model_pr_auc']}, ROC-AUC {ex['model_roc_auc']}.</p>")
     miss = "".join(f"<li>{html.escape(r[0])}: {html.escape(describe(r[2]))}</li>" for r, res in missed) or "<li>None</li>"
     fal = "".join(f"<li>{html.escape(r[0])}: {html.escape(describe(r[2]))} → {html.escape('; '.join(res[2]))}</li>"
                   for r, res in fa) or "<li>None</li>"
     body = (f"<h1>Thehro – measured accuracy</h1>"
             f"<p>{n:,} fresh synthetic payments (seed 2026). The model was trained on a different synthetic set "
             f"(seed 7) and never saw these. Full decision = rule guard + model.</p>"
-            f"<table><tr><th>Measure</th><th>Result</th><th>Payments</th></tr>{rows}</table>"
+            f"<table><tr><th>Measure</th><th>Result</th><th>Payments</th></tr>{rows}</table>" + extra +
             f"<h2>Failure cases: scams we missed</h2><ul>{miss}</ul>"
             f"<h2>Failure cases: genuine payments we held</h2><ul>{fal}</ul>"
             f"<p><b>Limits:</b> all data is synthetic and the phone-behaviour patterns are our assumptions until "
