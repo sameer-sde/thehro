@@ -7,3 +7,4 @@ __pycache__/
 .pytest_cache/
 server/cases_backup.jsonl
 server/cases*.jsonl
+server/cases*.jsonl
