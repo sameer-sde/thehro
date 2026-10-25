@@ -14,6 +14,10 @@ Sameer Ahmed (team lead, Osmania University) · Bhargab Das · Bhukya Narender (
 
 > *Thehro* (ठहरो) means "wait". It's a safety layer for a bank's app. It notices when a customer is paying **under pressure from a caller**, holds only that payment, and brings in someone outside the call.
 
+### ▶ Demo video
+
+**[Watch the 51-second demo (MP4)](docs/Thehro_demo.mp4)**: a normal payment passes; a digital-arrest payment is held, warned aloud in Hindi and English, checked with "Is this caller real?", reviewed by the bank analyst with a 1930 report pack, and released once the call ends.
+
 ---
 
 ## The problem
