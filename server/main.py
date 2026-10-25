@@ -82,6 +82,12 @@ class Study(BaseModel):
     condition: str = "normal"    # "normal" or "pressured"
 
 
+class SafetyMode(BaseModel):
+    """Customer-chosen protection: hold any payment above this amount made during a call."""
+    enabled: bool = False
+    limit: float = 20000
+
+
 class ScoreRequest(BaseModel):
     user_id: str
     payee_id: str = "unknown"
@@ -90,6 +96,7 @@ class ScoreRequest(BaseModel):
     account: Account = Account()
     phone: Phone = Phone()
     study: Study = Study()
+    safety_mode: SafetyMode = SafetyMode()
 
 
 class CheckIn(BaseModel):
@@ -248,6 +255,8 @@ HINDI = [
     (r"Much slower and more distracted than your usual payments", "आपके सामान्य भुगतानों से बहुत धीमा और विचलित"),
     (r"This account received (\d+) other held payment\(s\): possible mule account",
      "इस खाते में {0} अन्य रोके गए भुगतान आए: संभावित म्यूल खाता"),
+    (r"Your Safety Mode holds payments over Rs ([\d,]+) made during a call",
+     "आपका सेफ़्टी मोड कॉल के दौरान Rs {0} से ज़्यादा के भुगतान रोकता है"),
     (r"Customer said a caller is directing this payment", "ग्राहक ने बताया कि कॉल करने वाला यह भुगतान करवा रहा है"),
     (r"Unusual hesitation and app switching during this payment", "इस भुगतान के दौरान असामान्य झिझक और ऐप बदलना"),
 ]
@@ -280,6 +289,11 @@ def score(req: ScoreRequest):
     points, n, reasons, x, user = rule_part(req)
     prob = float(MODEL.predict_proba(np.array([x], dtype=float))[0, 1])
     tier = decide(points, n, prob, req.amount)
+    sm = req.safety_mode
+    if sm.enabled and req.phone.call_active and req.amount >= sm.limit and tier < 2:
+        # The customer's own rule, so it may hold a payment on its own.
+        tier = 2
+        reasons = reasons + [f"Your Safety Mode holds payments over Rs {sm.limit:,.0f} made during a call"]
     return tier, prob, reasons if tier > 0 else [], user
 
 

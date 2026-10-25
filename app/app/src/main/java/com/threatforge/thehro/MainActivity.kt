@@ -111,6 +111,22 @@ suspend fun postJson(url: String, body: JSONObject): JSONObject = withContext(Di
 fun sha256(t: String): String = java.security.MessageDigest.getInstance("SHA-256")
     .digest(t.toByteArray()).joinToString("") { "%02x".format(it) }
 
+// "Is this caller real?" – plain-language facts for the agency the scammer claims to be from.
+val CALLER_FACTS = mapOf(
+    "CBI" to ("CBI never arrests anyone on a call or asks for money. There is no ‘digital arrest’ in Indian law. Hang up and call 1930." to
+              "सीबीआई कभी फ़ोन पर गिरफ़्तार नहीं करती, न पैसे माँगती है। ‘डिजिटल अरेस्ट’ जैसा कोई क़ानून नहीं है। फ़ोन काटें और 1930 पर कॉल करें।"),
+    "Police" to ("Police never arrest anyone on a video call or make you transfer money to ‘verify’ it. Hang up and call 1930." to
+                 "पुलिस कभी वीडियो कॉल पर गिरफ़्तार नहीं करती, न ‘जाँच’ के लिए पैसे ट्रांसफ़र करवाती है। फ़ोन काटें और 1930 पर कॉल करें।"),
+    "Customs" to ("Customs never asks for money on a call about a ‘parcel in your name’. Hang up and call 1930." to
+                  "कस्टम्स कभी ‘आपके नाम के पार्सल’ के लिए फ़ोन पर पैसे नहीं माँगता। फ़ोन काटें और 1930 पर कॉल करें।"),
+    "TRAI" to ("TRAI does not call to cut your number or connect you to the police. Hang up and call 1930." to
+               "TRAI आपका नंबर बंद करने या पुलिस से जोड़ने के लिए कॉल नहीं करता। फ़ोन काटें और 1930 पर कॉल करें।"),
+    "Bank" to ("Your bank never asks you to move money to a ‘safe account’. Hang up and call the number on your card." to
+               "आपका बैंक कभी पैसे ‘सुरक्षित खाते’ में भेजने को नहीं कहता। फ़ोन काटें और कार्ड पर लिखे नंबर पर कॉल करें।"),
+    "RBI" to ("RBI never calls customers or holds money for checking. Hang up and call 1930." to
+              "RBI कभी ग्राहकों को कॉल नहीं करता, न जाँच के लिए पैसे रखता है। फ़ोन काटें और 1930 पर कॉल करें।"),
+)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -145,6 +161,10 @@ fun ThehroApp() {
     // Volunteer test: leave Volunteer ID empty for normal demo use.
     var volunteerId by remember { mutableStateOf("") }
     var pressuredRun by remember { mutableStateOf(false) }
+
+    // Safety Mode: the customer's own rule – hold payments above a limit made during a call.
+    var safetyOn by remember { mutableStateOf(false) }
+    var safetyLimit by remember { mutableStateOf("20000") }
 
     var result by remember { mutableStateOf<JSONObject?>(null) }
     var status by remember { mutableStateOf("") }
@@ -187,6 +207,13 @@ fun ThehroApp() {
                 OutlinedTextField(volunteerId, { volunteerId = it }, label = { Text("Volunteer ID (test only)") },
                     singleLine = true, modifier = Modifier.weight(1f))
                 Chip("Under pressure", pressuredRun) { pressuredRun = !pressuredRun }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Chip("🛡 Safety Mode", safetyOn, Modifier.weight(1f)) { safetyOn = !safetyOn }
+                OutlinedTextField(safetyLimit, { safetyLimit = it.filter { c -> c.isDigit() } },
+                    label = { Text("Hold on a call above Rs") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.weight(1.3f))
             }
             HorizontalDivider()
             OutlinedTextField(payee, { payee = it; Signals.onInput() }, label = { Text("Payee name") }, singleLine = true,
@@ -250,6 +277,25 @@ fun ThehroApp() {
                 for (i in 0 until reasons.length()) Text("• ${reasons.getString(i)}")
             }
             if (tier >= 1) Text(if (hindi) safetyHi else safetyEn, fontWeight = FontWeight.SemiBold)
+
+            // "Is this caller real?" – one tap shows (and speaks) the facts about the claimed agency.
+            if (tier >= 1) {
+                var claimed by remember(r) { mutableStateOf("") }
+                Text(if (hindi) "कॉल करने वाला कहता है कि वह यहाँ से है:" else "Is this caller real? They say they are from:",
+                    fontWeight = FontWeight.SemiBold)
+                val orgs = CALLER_FACTS.keys.toList()
+                for (rowOrgs in orgs.chunked(3)) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    rowOrgs.forEach { o ->
+                        Chip(o, claimed == o, Modifier.weight(1f)) {
+                            claimed = o
+                            CALLER_FACTS[o]?.let { (en, hi) -> speak(en, hi) }
+                        }
+                    }
+                }
+                CALLER_FACTS[claimed]?.let { (en, hi) ->
+                    Text(if (hindi) hi else en, color = Color(0xFFB0401A), fontWeight = FontWeight.Bold)
+                }
+            }
 
             if (r.optBoolean("escalated")) Text(
                 if (hindi) "यही ‘डिजिटल अरेस्ट’ ठगी का तरीका है। असली पुलिस कभी फ़ोन या वीडियो कॉल पर गिरफ़्तार नहीं करती। बैंक अधिकारी आपको कॉल करेंगे।"
@@ -386,6 +432,9 @@ fun ThehroApp() {
                                 .put("account_number_bursts", Signals.accountBursts)
                                 .put("app_switches", Signals.appSwitches)
                                 .put("on_device_score", Signals.pressureScore()))
+                            .put("safety_mode", JSONObject()
+                                .put("enabled", safetyOn)
+                                .put("limit", safetyLimit.toLongOrNull() ?: 20000L))
                             .put("study", JSONObject()
                                 .put("volunteer", volunteerId.trim())
                                 .put("condition", if (pressuredRun) "pressured" else "normal"))
