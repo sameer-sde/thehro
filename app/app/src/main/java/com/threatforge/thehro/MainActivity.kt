@@ -201,8 +201,9 @@ fun ThehroApp() {
     }
     Column(
         Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(if (result == null) 8.dp else 4.dp)
     ) {
+    ProvideTextStyle(if (result != null) LocalTextStyle.current.copy(fontSize = 13.sp) else LocalTextStyle.current) {
         val r = result
         if (r == null) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -261,7 +262,7 @@ fun ThehroApp() {
             val spokenEn = "Stop. This payment is on hold for your safety. $safetyEn Please end the call now."
             val spokenHi = "रुकिए। आपकी सुरक्षा के लिए यह भुगतान रोका गया है। $safetyHi कृपया कॉल अभी काट दें।"
             LaunchedEffect(r) { if (tier >= 2) { kotlinx.coroutines.delay(400); speak(spokenEn, spokenHi) } }
-            Box(Modifier.fillMaxWidth().background(color).padding(16.dp)) {
+            Box(Modifier.fillMaxWidth().background(color).padding(horizontal = 14.dp, vertical = 10.dp)) {
                 Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             }
             if (!r.isNull("on_device_score") && r.has("on_device_score")) Text("On-device pressure score: %.2f".format(r.optDouble("on_device_score")),
@@ -357,23 +358,24 @@ fun ThehroApp() {
                               else "A bank officer will review this payment before it is released.")
                     Text(if (hindi) "आपके परिवार को सूचित किया गया: $guardian" else "Guardian alerted: $guardian",
                         color = Color(0xFF1F6F8B), fontWeight = FontWeight.SemiBold)
-                    OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(modifier = Modifier.weight(1f), onClick = {
                         val who = r.optString("customer", "Your family member")
                         val msg = "Thehro safety alert: $who is trying to send Rs ${r.optLong("amount")} " +
                                 "while on a phone call. The bank has paused it. Please call $who now. " +
                                 "Scammers pose as police and keep victims on the call."
                         ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND)
                             .setType("text/plain").putExtra(Intent.EXTRA_TEXT, msg), "Message guardian"))
-                    }) { Text(if (hindi) "परिवार को संदेश भेजें" else "Message guardian now") }
-                    ToggleRow("Simulate active call (emulator only)", simulateCall) { simulateCall = it }
-                    Text("Call active now: ${if (callNow()) "yes" else "no"}", color = Color.Gray)
-                    OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                    }) { Text(if (hindi) "परिवार को संदेश" else "Message guardian") }
+                    OutlinedButton(modifier = Modifier.weight(1f), onClick = {
                         ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:1930")))
-                    }) { Text(if (hindi) "साइबर हेल्पलाइन 1930 पर शिकायत करें" else "Report to cyber helpline 1930") }
+                    }) { Text(if (hindi) "1930 पर शिकायत" else "Report to 1930") }
+                    }
                 }
 
             }
         }
+    }
     }
     val rr = result
     if (rr != null) {
@@ -406,7 +408,7 @@ fun ThehroApp() {
                 }
                 else -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedButton(modifier = Modifier.weight(1f), onClick = { resetForm() }) {
-                        Text(if (hindi) "रद्द करें" else "Cancel payment") }
+                        Text(if (hindi) "← वापस" else "← Back to home") }
                     Button(modifier = Modifier.weight(1.4f), onClick = {
                         scope.launch {
                             try {
