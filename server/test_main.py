@@ -131,3 +131,10 @@ def test_model_reduces_false_holds_versus_rules():
     comp = m.EVAL_CACHE["extra"]["comparison"]
     assert comp["full"]["genuine_false_hold_rate"][0] <= comp["rules"]["genuine_false_hold_rate"][0]
     assert comp["full"]["all_scams_flagged_rate"][0] >= 0.85
+
+
+def test_cases_export_csv():
+    scam()
+    body = m.cases_csv().body
+    body = body.decode() if isinstance(body, bytes) else body
+    assert body.startswith("case_id,") and "HOLD" in body

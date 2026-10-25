@@ -1,5 +1,11 @@
 # Thehro – stop the payment, not the customer
 
+![Android](https://img.shields.io/badge/Android-Kotlin%20%7C%20Jetpack%20Compose-3DDC84?logo=android&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-scoring%20service-009688?logo=fastapi&logoColor=white)
+![scikit-learn](https://img.shields.io/badge/scikit--learn-gradient%20boosting-F7931E?logo=scikitlearn&logoColor=white)
+![Tests](https://github.com/sameer-sde/thehro/actions/workflows/tests.yml/badge.svg)
+
 **Coerced-payer detection for digital arrest scams**
 
 Team ThreatForge · RAKSHAM AI Cybersecurity Hackathon (IIT Delhi × Amazon) · Track 02: AI-Driven Scam Pattern Recognition
@@ -108,6 +114,8 @@ sequenceDiagram
 | ❓ | **Safety check** | Three yes/no questions ("Did they say you are under arrest?"). Any "yes" sends the payment to a bank officer |
 | 👨‍👩‍👧 | **Guardian alert** | A family member gets an alert (no amounts, can't move money) and a one-tap message |
 | 🧑‍💼 | **Analyst queue** | Live dashboard with counts, every held case, reasons, release / keep |
+| 📈 | **Live dashboard and export** | Charts of decisions and the most common warning signs; download every case as CSV; save any report pack as PDF |
+| 📴 | **Offline fallback** | If the bank's scoring service can't be reached, the app applies a simple on-phone rule: a large payment during a call still gets a warning |
 | 📄 | **Report pack** | A ready-to-file summary for the 1930 helpline / cybercrime.gov.in, plus a one-tap 1930 dialer in the app |
 | 📊 | **Built-in evaluation** | `/metrics` scores 20,675 held-out payments and lists failure cases; `/evaluate` scores any labelled batch |
 
@@ -208,7 +216,8 @@ thehro/
 | `POST /score` | Score a payment and return the tier, reasons (English and Hindi), guardian and case ID |
 | `POST /checkin` | The customer's safety-check answers. Any "yes" escalates to analyst review |
 | `POST /confirm` | Re-confirm a held payment (refused while a call is active) |
-| `GET /analyst` | Analyst dashboard and queue, release / keep |
+| `GET /analyst` | Analyst dashboard (counts, charts) and queue, release / keep |
+| `GET /cases.csv` | Export every case as CSV |
 | `GET /guardian/{case_id}` | Guardian alert page |
 | `GET /report/{case_id}` | Report pack for 1930 / cybercrime.gov.in |
 | `GET /baseline/{user_id}` | The user's learned normal pace |
@@ -257,7 +266,7 @@ The app's server URL defaults to `http://localhost:8000`.
 cd server && pytest -q
 ```
 
-17 automated tests cover the core guarantees: a normal payment passes, the scam pattern is held with reasons, **no single signal can alert**, release is refused during a call, the safety check escalates, analyst release, mule detection (and that a mule match alone doesn't alert), Safety Mode limits, the on-device score as one vote only, invalid payloads rejected, and the model reducing false holds compared with rules alone. They run on every push via GitHub Actions.
+18 automated tests cover the core guarantees: a normal payment passes, the scam pattern is held with reasons, **no single signal can alert**, release is refused during a call, the safety check escalates, analyst release, mule detection (and that a mule match alone doesn't alert), Safety Mode limits, the on-device score as one vote only, invalid payloads rejected, and the model reducing false holds compared with rules alone, and CSV export. They run on every push via GitHub Actions.
 
 ---
 
@@ -270,7 +279,7 @@ What the prototype does today, and what a bank deployment adds:
 | Enforcing the hold | Scoring service returns the decision; the demo app shows it | **Thehro is advisory**: the bank's payment-authorisation system enforces the hold, with a server-side state machine `PENDING → HELD → RELEASED / CANCELLED` |
 | Storage | Cases and baselines persist to files and survive restarts | PostgreSQL with transactions and unique constraints; retries are idempotent so a payment can't be released twice |
 | Analyst access | Open demo page | Authenticated, role-based access; every release, keep and override in a tamper-resistant audit log |
-| Failure handling | App reports if the server is unreachable | Defined timeout and fallback: if scoring is down, payments above a limit made during a call fall back to a warning, never a silent pass |
+| Failure handling | If scoring is unreachable, the app falls back to an on-phone rule (large payment during a call gets a warning; others continue) | Defined timeout and fallback: if scoring is down, payments above a limit made during a call fall back to a warning, never a silent pass |
 | Signals | Measured within the payment screen only | Explicit consent, accessibility-aware baselines (slow typists, screen readers), missing signals never treated as fraud |
 | Models | Trained on synthetic data | Retrained on consented sessions and confirmed fraud labels; calibrated thresholds tuned to the bank's cost of a false hold vs a missed scam; scenario-level train/test splits |
 | Operations | Manual runs | Latency monitoring (p50/p95/p99), error and timeout rates, rate limiting, secret and dependency scanning |

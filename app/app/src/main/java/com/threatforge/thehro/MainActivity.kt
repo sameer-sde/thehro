@@ -254,6 +254,10 @@ fun ThehroApp() {
                 Chip("हिंदी", hindi, Modifier.weight(1f)) { hindi = !hindi }
                 Chip(if (hindi) "🔊 सुनें" else "🔊 Read aloud", false, Modifier.weight(1f)) { speak(spokenEn, spokenHi) }
             }
+            if (r.optBoolean("offline")) Text(
+                if (hindi) "बैंक की सुरक्षा जाँच उपलब्ध नहीं थी। ऐप ने फ़ोन पर ही एक सरल नियम लगाया।"
+                else "Bank safety check was unreachable. The app used a simple on-phone rule instead.",
+                fontSize = 13.sp, color = Color.Gray)
             val reasons = r.optJSONArray(if (hindi && r.has("reasons_hi")) "reasons_hi" else "reasons")
             if (reasons != null && reasons.length() > 0) {
                 Text(if (hindi) "क्यों:" else "Why:", fontWeight = FontWeight.SemiBold)
@@ -418,7 +422,18 @@ fun ThehroApp() {
                                 .put("condition", if (pressuredRun) "pressured" else "normal"))
                         scope.launch {
                             try { result = postJson("$serverUrl/score", body) }
-                            catch (e: Exception) { status = "Could not reach server: ${e.message}" }
+                            catch (e: Exception) {
+                                val amt = amount.toLongOrNull() ?: 0L
+                                val limit = if (safetyOn) (safetyLimit.toLongOrNull() ?: 20000L) else 20000L
+                                result = if (callNow() && amt >= limit) JSONObject().put("tier", 1).put("offline", true)
+                                    .put("reasons", org.json.JSONArray()
+                                        .put("You are on a call while making this payment")
+                                        .put("Bank safety check is offline, so the app is being careful"))
+                                    .put("reasons_hi", org.json.JSONArray()
+                                        .put("भुगतान करते समय आप फ़ोन कॉल पर हैं")
+                                        .put("बैंक की सुरक्षा जाँच ऑफ़लाइन है, इसलिए ऐप सावधानी बरत रहा है"))
+                                else JSONObject().put("tier", 0).put("offline", true)
+                            }
                             busy = false
                         }
                     }

@@ -1,4 +1,5 @@
 import csv
+import io
 import html
 import json
 import re
@@ -8,7 +9,7 @@ import uuid
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel
 from sklearn.ensemble import HistGradientBoostingClassifier
 
@@ -427,10 +428,42 @@ def analyst():
     tiles = "".join(f'<div style="display:inline-block;background:#fff;border:1px solid #D9D3C4;border-radius:10px;'
                     f'padding:10px 18px;margin:0 10px 10px 0"><div style="font-size:28px;font-weight:700">{v}</div>'
                     f'<div style="color:#4A5468">{k}</div></div>' for k, v in stats)
-    body = ("<h1>Thehro – fraud analyst queue</h1>" + tiles + "<p>Held and review cases (refreshes every 5 s). Synthetic demo data.</p>"
+    def bars(title, items, color):
+        top = max([v for _, v in items] or [1]) or 1
+        rows_ = "".join(
+            f'<div style="display:flex;align-items:center;gap:10px;margin:6px 0"><div style="width:260px;font-size:14px">{html.escape(k)}</div>'
+            f'<div style="flex:1;background:#ECE8DD;border-radius:6px"><div style="width:{100 * v / top:.0f}%;background:{color};'
+            f'height:18px;border-radius:6px"></div></div><div style="width:40px;text-align:right">{v}</div></div>'
+            for k, v in items)
+        return (f'<div style="flex:1;min-width:320px;background:#fff;border:1px solid #D9D3C4;border-radius:12px;padding:16px">'
+                f'<b>{title}</b>{rows_ or "<p>No data yet</p>"}</div>')
+    tier_items = [(f"{LABELS[t]}", count(lambda c, t=t: c["tier"] == t)) for t in (0, 1, 2, 3)]
+    reason_count = {}
+    for c in allc:
+        for r in c["reasons"]:
+            key = re.sub(r"\d[\d,]*", "N", r)
+            reason_count[key] = reason_count.get(key, 0) + 1
+    top_reasons = sorted(reason_count.items(), key=lambda kv: -kv[1])[:6]
+    charts = (f'<div style="display:flex;gap:16px;flex-wrap:wrap;margin:10px 0 18px">'
+              f'{bars("Decisions", tier_items, "#1F6F8B")}{bars("Most common warning signs", top_reasons, "#B0401A")}</div>')
+    body = ("<h1>Thehro – fraud analyst queue</h1>" + tiles +
+            '<a href="/cases.csv" style="margin-left:6px">⬇ Download all cases (CSV)</a>' + charts +
+            "<p>Held and review cases (refreshes every 5 s). Synthetic demo data.</p>"
             "<table><tr><th>Time</th><th>Customer</th><th>Amount</th><th>Tier</th><th>Model score</th>"
             "<th>Reasons</th><th>Status</th><th>Action</th></tr>" + (rows or '<tr><td colspan="8">No held cases</td></tr>') + "</table>")
     return PAGE.format(title="Analyst queue", body=body)
+
+
+@app.get("/cases.csv")
+def cases_csv():
+    out = io.StringIO()
+    fields = ["case_id", "time", "user_name", "payee", "amount", "tier", "label", "score", "status", "call_active", "reasons"]
+    w = csv.DictWriter(out, fieldnames=fields)
+    w.writeheader()
+    for c in CASES.values():
+        w.writerow({**{k: c.get(k) for k in fields}, "reasons": "; ".join(c.get("reasons", []))})
+    return Response(content=out.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=thehro_cases.csv"})
 
 
 @app.post("/analyst/{case_id}/{action}")
@@ -648,7 +681,9 @@ def report_pack(case_id: str):
             ("Decision", f"{c['label']} (tier {c['tier']})"), ("Current status", c["status"]),
             ("Model score", str(c["score"]))]
     table = "".join(f"<tr><th>{html.escape(k)}</th><td>{html.escape(str(v))}</td></tr>" for k, v in rows)
-    body = (f"<h1>Fraud report pack</h1><p>For a complaint on the national cybercrime helpline <b>1930</b> "
+    body = (f"<style>@media print{{.noprint{{display:none}}}}</style>"
+            f"<button class='noprint' onclick='window.print()' style='float:right'>Save as PDF / Print</button>"
+            f"<h1>Fraud report pack</h1><p>For a complaint on the national cybercrime helpline <b>1930</b> "
             f"or at <b>cybercrime.gov.in</b>. Synthetic demo data.</p><table>{table}</table>"
             f"<h2>Why the payment was stopped</h2><ul>{reasons}</ul>"
             f"<p style='color:#4A5468'>Contains no call audio, call logs, contacts or typed text.</p>")
