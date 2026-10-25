@@ -34,6 +34,8 @@ flowchart LR
         B1["Bank events<br/>FD broken · new payee · limit raised<br/>large transfers · amount vs usual"]
         B2["Personal baseline<br/>(this user's normal pace)"]
         B3["Mule network check<br/>(same account in other held payments)"]
+        B7["Customer's Safety Mode<br/>(own limit during calls)"]
+        B7 --> B6
         B4["Rule guard<br/>no single signal can alert"]
         B5["Gradient-boosted model"]
         B6{"Decision<br/>T0 · T1 · T2 · T3"}
@@ -45,7 +47,7 @@ flowchart LR
     end
 
     subgraph PEOPLE["👥 Response"]
-        C1["Customer<br/>warning / hold screen<br/>spoken alert · Hindi · safety check"]
+        C1["Customer<br/>warning / hold screen · spoken alert · Hindi<br/>caller check · safety questions"]
         C2["Guardian<br/>alert, no amounts"]
         C3["Bank analyst<br/>review queue · release / keep"]
         C4["Report pack<br/>1930 · cybercrime.gov.in"]
@@ -101,6 +103,8 @@ sequenceDiagram
 | ⏸️ | **Tiered response** | Pass, warn, hold until the call ends, or analyst review. Only the risky payment is touched |
 | 🔊 | **Spoken alert** | The hold message is read aloud, so a victim still on the call hears it |
 | 🇮🇳 | **Hindi warning screen** | Title, reasons and safety advice switch to Hindi in one tap |
+| 🛡️ | **Safety Mode** | The customer (or their family) sets their own rule: *hold any payment above ₹X made during a call*. Consent-based protection for senior citizens |
+| 🕵️ | **"Is this caller real?"** | The user taps who the caller claims to be (CBI, Police, Customs, TRAI, Bank, RBI) and the app shows and speaks the facts: *"CBI never arrests anyone on a call… call 1930"* |
 | ❓ | **Safety check** | Three yes/no questions ("Did they say you are under arrest?"). Any "yes" sends the payment to a bank officer |
 | 👨‍👩‍👧 | **Guardian alert** | A family member gets an alert (no amounts, can't move money) and a one-tap message |
 | 🧑‍💼 | **Analyst queue** | Live dashboard with counts, every held case, reasons, release / keep |
@@ -113,7 +117,7 @@ sequenceDiagram
 |---|---|---|
 | **T0 Pass** | Few or no signals | Nothing. Payment goes through |
 | **T1 Warn** | 2+ signals, medium risk | Plain-language reasons, safety check, continue or cancel |
-| **T2 Hold** | 3+ signals, high risk | Payment held, spoken alert, guardian alerted. Released only after confirming with **no call active** |
+| **T2 Hold** | 3+ signals, high risk, or the customer's own Safety Mode rule | Payment held, spoken alert, guardian alerted. Released only after confirming with **no call active** |
 | **T3 Review** | Highest risk and ≥ ₹1,00,000, or the customer says a caller is directing them | Held until a bank analyst reviews it |
 
 ---
@@ -224,6 +228,7 @@ The app's server URL defaults to `http://localhost:8000`.
 4. Open `/analyst` to see the case, then **Report pack**.
 5. Turn off the call and confirm, or release from the analyst page: the payment goes through.
 6. Send ₹6,000 to the **same account**: flagged as a **possible mule account**.
+7. Turn on **🛡 Safety Mode** (₹20,000), simulate a call and send ₹25,000. It's held by the customer's own rule. Tap **CBI** under "Is this caller real?".
 
 *Demo mode skips the 4-hour cooling period so the release can be shown live. Bank events are simulated with the demo switches.*
 
