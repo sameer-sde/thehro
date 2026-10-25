@@ -344,6 +344,8 @@ def confirm(req: ConfirmRequest):
     case = CASES.get(req.case_id)
     if not case:
         raise HTTPException(404, "Unknown case")
+    if case["status"] == "released":
+        return {"status": "released"}
     if req.call_active:
         return {"status": "still_held", "reason": "A call is still active. End the call, then confirm again."}
     if case["tier"] == 3 and case["status"] != "released":

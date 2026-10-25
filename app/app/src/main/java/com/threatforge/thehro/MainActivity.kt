@@ -362,6 +362,8 @@ fun ThehroApp() {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)) {
             if (status.isNotEmpty()) Text(status, fontWeight = FontWeight.SemiBold)
+            if (tier >= 2) Chip(if (callNow()) "📞 Call active – tap to end call" else "Call ended", simulateCall,
+                Modifier.fillMaxWidth()) { simulateCall = !simulateCall }
             when (tier) {
                 0 -> Button(modifier = Modifier.fillMaxWidth(), onClick = { resetForm() }) { Text("New payment") }
                 1 -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
