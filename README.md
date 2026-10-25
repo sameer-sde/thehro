@@ -109,9 +109,10 @@ sequenceDiagram
 | ⏸️ | **Tiered response** | Pass, warn, hold until the call ends, or analyst review. Only the risky payment is touched |
 | 🔊 | **Spoken alert** | The hold message is read aloud, so a victim still on the call hears it |
 | 🇮🇳 | **Hindi warning screen** | Title, reasons and safety advice switch to Hindi in one tap |
+| 🔒 | **Screen-share shield** | While a real call is active, the app hides itself from screen sharing and screen recording (Android `FLAG_SECURE`), so a scammer watching over a video call sees a black screen, not the payment or the warnings |
 | 🛡️ | **Safety Mode** | The customer (or their family) sets their own rule: *hold any payment above ₹X made during a call*. Consent-based protection for senior citizens |
 | 🕵️ | **"Is this caller real?"** | The user taps who the caller claims to be (CBI, Police, Customs, TRAI, Bank, RBI) and the app shows and speaks the facts: *"CBI never arrests anyone on a call… call 1930"* |
-| ❓ | **Safety check** | Three yes/no questions ("Did they say you are under arrest?"). Any "yes" sends the payment to a bank officer |
+| ❓ | **Safety check** | On a hold, three yes/no questions ("Did they say you are under arrest?"). Any "yes" sends the payment to a bank officer. Kept off the warning screen so genuine customers aren't questioned |
 | 👨‍👩‍👧 | **Guardian alert** | A family member gets an alert (no amounts, can't move money) and a one-tap message |
 | 🧑‍💼 | **Analyst queue** | Live dashboard with counts, every held case, reasons, release / keep |
 | 📈 | **Live dashboard and export** | Charts of decisions and the most common warning signs; download every case as CSV; save any report pack as PDF |
@@ -124,7 +125,7 @@ sequenceDiagram
 | Tier | When | What the customer sees |
 |---|---|---|
 | **T0 Pass** | Few or no signals | Nothing. Payment goes through |
-| **T1 Warn** | 2+ signals, medium risk | Plain-language reasons, safety check, continue or cancel |
+| **T1 Warn** | 2+ signals, medium risk | Plain-language reasons and one question: *"Do you still want to make this payment?"* **Yes** sends it, **No** moves it to a hold |
 | **T2 Hold** | 3+ signals, high risk, or the customer's own Safety Mode rule | Payment held, spoken alert, guardian alerted. Released only after confirming with **no call active** |
 | **T3 Review** | Highest risk and ≥ ₹1,00,000, or the customer says a caller is directing them | Held until a bank analyst reviews it |
 
@@ -266,7 +267,7 @@ The app's server URL defaults to `http://localhost:8000`.
 cd server && pytest -q
 ```
 
-18 automated tests cover the core guarantees: a normal payment passes, the scam pattern is held with reasons, **no single signal can alert**, release is refused during a call, the safety check escalates, analyst release, mule detection (and that a mule match alone doesn't alert), Safety Mode limits, the on-device score as one vote only, invalid payloads rejected, and the model reducing false holds compared with rules alone, and CSV export. They run on every push via GitHub Actions.
+19 automated tests cover the core guarantees: a normal payment passes, the scam pattern is held with reasons, **no single signal can alert**, release is refused during a call, the safety check escalates, a "No" on a warning moves it to a hold, analyst release, mule detection (and that a mule match alone doesn't alert), Safety Mode limits, the on-device score as one vote only, invalid payloads rejected, and the model reducing false holds compared with rules alone, and CSV export. They run on every push via GitHub Actions.
 
 ---
 

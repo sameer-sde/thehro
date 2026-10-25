@@ -8,3 +8,4 @@ __pycache__/
 server/cases_backup.jsonl
 server/cases*.jsonl
 server/cases*.jsonl
+server/*.jsonl

@@ -122,7 +122,10 @@ val CALLER_FACTS = mapOf(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { MaterialTheme { ThehroApp() } }
+        setContent {
+            MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF1F6F8B), onPrimary = Color.White,
+                secondary = Color(0xFF14213D), onSecondary = Color.White)) { ThehroApp() }
+        }
     }
 
     override fun onStop() {
@@ -160,6 +163,17 @@ fun ThehroApp() {
 
     fun callNow() = isCallActive(ctx) || simulateCall
 
+    var realCall by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            realCall = isCallActive(ctx)
+            val w = (ctx as? android.app.Activity)?.window
+            if (realCall) w?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+            else w?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+
     var hindi by remember { mutableStateOf(false) }
     val tts = remember { mutableStateOf<TextToSpeech?>(null) }
     DisposableEffect(Unit) {
@@ -181,19 +195,16 @@ fun ThehroApp() {
     }
 
     Column(Modifier.fillMaxSize().imePadding()) {
+    Column(Modifier.fillMaxWidth().background(Color(0xFF14213D)).padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Text("🛡 Thehro Bank", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text("Protected by Thehro · demo", color = Color(0xFFBFC8DA), fontSize = 12.sp)
+    }
     Column(
         Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text("Thehro Bank (demo)", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-
         val r = result
         if (r == null) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(volunteerId, { volunteerId = it }, label = { Text("Volunteer ID (test only)") },
-                    singleLine = true, modifier = Modifier.weight(1f))
-                Chip("Under pressure", pressuredRun) { pressuredRun = !pressuredRun }
-            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Chip("🛡 Safety Mode", safetyOn, Modifier.weight(1f)) { safetyOn = !safetyOn }
                 OutlinedTextField(safetyLimit, { safetyLimit = it.filter { c -> c.isDigit() } },
@@ -215,6 +226,11 @@ fun ThehroApp() {
 
             HorizontalDivider()
             Text("Demo controls (simulated bank events) – tap to switch", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(volunteerId, { volunteerId = it }, label = { Text("Volunteer ID (test only)") },
+                    singleLine = true, modifier = Modifier.weight(1f))
+                Chip("Under pressure", pressuredRun) { pressuredRun = !pressuredRun }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Chip("FD broken today", fdBroken, Modifier.weight(1f)) { fdBroken = !fdBroken }
                 Chip("New payee", newPayee, Modifier.weight(1f)) { newPayee = !newPayee }
@@ -265,7 +281,7 @@ fun ThehroApp() {
             }
             if (tier >= 1) Text(if (hindi) safetyHi else safetyEn, fontWeight = FontWeight.SemiBold)
 
-            if (tier >= 1) {
+            if (tier >= 2) {
                 var claimed by remember(r) { mutableStateOf("") }
                 Text(if (hindi) "कॉल करने वाला कहता है कि वह यहाँ से है:" else "Is this caller real? They say they are from:",
                     fontWeight = FontWeight.SemiBold)
@@ -289,7 +305,7 @@ fun ThehroApp() {
                      "Your payment is blocked until a bank officer calls you.",
                 color = Color(0xFFB0401A), fontWeight = FontWeight.Bold)
 
-            if (tier in 1..2 && r.has("case_id")) {
+            if (tier == 2 && r.has("case_id")) {
                 var answers by remember(r) { mutableStateOf(listOf(false, false, false)) }
                 var sent by remember(r) { mutableStateOf(false) }
                 val qs = if (hindi) listOf("क्या फ़ोन पर कोई आपको बता रहा है कि क्या करना है?",
@@ -366,11 +382,24 @@ fun ThehroApp() {
                 Modifier.fillMaxWidth()) { simulateCall = !simulateCall }
             when (tier) {
                 0 -> Button(modifier = Modifier.fillMaxWidth(), onClick = { resetForm() }) { Text("New payment") }
-                1 -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(modifier = Modifier.weight(1f), onClick = { resetForm() }) {
-                        Text(if (hindi) "रद्द करें" else "Cancel payment") }
-                    Button(modifier = Modifier.weight(1f), onClick = { result = JSONObject().put("tier", 0) }) {
-                        Text(if (hindi) "जारी रखें" else "Continue") }
+                1 -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(if (hindi) "क्या आप फिर भी यह भुगतान करना चाहते हैं?" else "Do you still want to make this payment?",
+                        fontWeight = FontWeight.Bold)
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        OutlinedButton(modifier = Modifier.weight(1f), onClick = {
+                            if (!rr.has("case_id")) resetForm() else scope.launch {
+                                try {
+                                    val res = postJson("$serverUrl/escalate", JSONObject().put("case_id", rr.optString("case_id")))
+                                    result = JSONObject(rr.toString()).put("tier", res.optInt("tier", 2))
+                                        .put("reasons", res.optJSONArray("reasons"))
+                                        .put("reasons_hi", res.optJSONArray("reasons_hi"))
+                                        .put("hold_minutes", res.optInt("hold_minutes", 240))
+                                } catch (e: Exception) { status = "Could not reach server: ${e.message}" }
+                            }
+                        }) { Text(if (hindi) "नहीं, रोकें" else "No, hold it") }
+                        Button(modifier = Modifier.weight(1f), onClick = { result = JSONObject().put("tier", 0) }) {
+                            Text(if (hindi) "हाँ, भेजें" else "Yes, proceed") }
+                    }
                 }
                 else -> Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     OutlinedButton(modifier = Modifier.weight(1f), onClick = { resetForm() }) {
@@ -442,6 +471,7 @@ fun ThehroApp() {
                 ) { Text(if (busy) "Checking…" else "Send money") }
                 if (status.isNotEmpty()) Text(status, color = Color(0xFFB0401A))
                 Text("Call active now: ${if (callNow()) "yes" else "no"}", color = Color.Gray)
+                if (realCall) Text("🔒 Screen sharing is hidden while you are on a call", color = Color(0xFF1F6F8B), fontSize = 13.sp)
         }
     }
     }
@@ -459,7 +489,7 @@ fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
 fun Chip(label: String, on: Boolean, modifier: Modifier = Modifier, onToggle: () -> Unit) {
     Box(
         modifier
-            .background(if (on) Color(0xFF6750A4) else Color(0xFFE7E0EC), RoundedCornerShape(18.dp))
+            .background(if (on) Color(0xFF1F6F8B) else Color(0xFFE3ECEF), RoundedCornerShape(18.dp))
             .clickable { onToggle() }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center
