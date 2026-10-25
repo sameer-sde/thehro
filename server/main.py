@@ -1,11 +1,3 @@
-"""
-Thehro scoring server (Team ThreatForge, RAKSHAM finale).
-
-Run:  uvicorn main:app --host 0.0.0.0 --port 8000
-Docs: http://localhost:8000/docs     Analyst: /analyst     Guardian: /guardian/<case_id>
-
-All data is synthetic. No real bank, customer or call data is used.
-"""
 import csv
 import html
 import json
@@ -22,20 +14,19 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 
 app = FastAPI(title="Thehro scoring server")
 
-# ---------------------------------------------------------------- demo users
+
 DEMO_USERS = {
     "demo_user_1": {"name": "Ramesh", "usual_amount": 6000, "balance": 2_500_000, "guardian": "Priya (daughter)"},
     "demo_user_2": {"name": "Anita", "usual_amount": 20000, "balance": 900_000, "guardian": None},
 }
 DEFAULT_USER = {"name": "Customer", "usual_amount": 10000, "balance": 1_000_000, "guardian": None}
 
-# ------------------------------------------------- synthetic training data
+
 FEATURES = ["amount_ratio", "new_payee", "call_active", "fd_broken_24h",
             "prior_large_6h", "limit_raised_24h", "balance_share"]
 
 
 def synth(rng, n_normal=200_000, n_life=3_000, n_scam=1_500):
-    """Synthetic payments: normal, genuine large (hard negatives), digital-arrest scams."""
     def block(n, ratio, new_p, call_p, fd_p, prior, limit_p, share, label):
         return np.column_stack([ratio, rng.random(n) < new_p, rng.random(n) < call_p, rng.random(n) < fd_p,
                                 prior, rng.random(n) < limit_p, share]).astype(float), np.full(n, label)
@@ -59,7 +50,7 @@ X_train, y_train = synth(np.random.default_rng(7))
 MODEL = HistGradientBoostingClassifier(max_depth=4, max_iter=200, learning_rate=0.08, random_state=0)
 MODEL.fit(X_train, y_train)
 
-# ------------------------------------------------------------- API schema
+
 class Account(BaseModel):
     payee_added_minutes_ago: int = 100_000
     fd_broken_24h: bool = False
@@ -74,16 +65,15 @@ class Phone(BaseModel):
     account_number_pasted: bool = False
     account_number_bursts: int = 0
     app_switches: int = 0
-    on_device_score: float = -1.0   # score from the phone's own model; -1 = not sent
+    on_device_score: float = -1.0
 
 
 class Study(BaseModel):
-    volunteer: str = ""          # e.g. "V1"; empty = not a study run
-    condition: str = "normal"    # "normal" or "pressured"
+    volunteer: str = ""
+    condition: str = "normal"
 
 
 class SafetyMode(BaseModel):
-    """Customer-chosen protection: hold any payment above this amount made during a call."""
     enabled: bool = False
     limit: float = 20000
 
@@ -91,7 +81,7 @@ class SafetyMode(BaseModel):
 class ScoreRequest(BaseModel):
     user_id: str
     payee_id: str = "unknown"
-    payee_account_hash: str = ""   # SHA-256 of the account number, made on the phone (no raw number sent)
+    payee_account_hash: str = ""
     amount: float
     account: Account = Account()
     phone: Phone = Phone()
@@ -101,7 +91,7 @@ class ScoreRequest(BaseModel):
 
 class CheckIn(BaseModel):
     case_id: str
-    answers: list[bool] = []       # the customer's yes/no answers to the safety questions
+    answers: list[bool] = []
 
 
 class ConfirmRequest(BaseModel):
@@ -111,7 +101,7 @@ class ConfirmRequest(BaseModel):
 
 LABELS = {0: "PASS", 1: "WARN", 2: "HOLD", 3: "REVIEW"}
 
-# Evidence log: every decision is appended to cases.jsonl and reloaded on restart.
+
 CASES_FILE = "cases.jsonl"
 STUDY_FILE = "study.csv"
 STUDY_FIELDS = ["time", "volunteer", "condition", "call_active", "session_seconds", "avg_field_pause_ms",
@@ -126,7 +116,6 @@ if os.path.exists(CASES_FILE):
 
 
 def save_case(case: dict):
-    """Append the latest state of a case (later lines win on reload)."""
     CASES[case["case_id"]] = case
     with open(CASES_FILE, "a") as f:
         f.write(json.dumps(case) + "\n")
@@ -147,8 +136,6 @@ def log_study(req, tier: int):
                     "tier": tier, "label": LABELS[tier]})
 
 
-# ------------------------------------------------------------------ scoring
-# Personal baseline: each user's normal pace, learned from their ordinary (passed) payments.
 BASELINE_FILE = "baselines.json"
 BASELINES: dict[str, list] = json.load(open(BASELINE_FILE)) if os.path.exists(BASELINE_FILE) else {}
 BASELINE_MIN_SESSIONS = 3
@@ -167,14 +154,11 @@ def update_baseline(user_id: str, p: Phone):
     hist = BASELINES.setdefault(user_id, [])
     hist.append({"pause": p.avg_field_pause_ms, "bursts": p.account_number_bursts,
                  "switches": p.app_switches, "session": p.session_seconds})
-    del hist[:-20]                                  # keep the last 20 normal sessions
+    del hist[:-20]
     with open(BASELINE_FILE, "w") as f:
         json.dump(BASELINES, f)
 
 
-# On-device pressure model: logistic regression on 5 phone timings, trained on synthetic sessions
-# (ondevice/train.py, seed 11). The same weights run inside the app; this copy lets the server
-# check old runs. Features: log(1+pause ms), bursts, app switches, log(1+session s), pasted.
 ONDEVICE_W = [0.9411, 1.6986, 1.2457, 4.5118, 0.548]
 ONDEVICE_B = -32.6609
 ONDEVICE_THRESHOLD = 0.8
@@ -187,31 +171,29 @@ def on_device_score(pause_ms, bursts, switches, session_s, pasted) -> float:
 
 
 def phone_pressure(p: Phone, base=None) -> bool:
-    """Behaviour signal: 2+ of these in one session. Uses the user's own baseline when known."""
     if base:
         hits = [p.avg_field_pause_ms > max(2 * base["pause"], 1500),
                 p.account_number_pasted or p.account_number_bursts >= base["bursts"] + 2,
                 p.app_switches >= base["switches"] + 2,
                 p.session_seconds > max(2 * base["session"], 120)]
-    else:                                           # new user: fixed limits until 3 normal payments
+    else:
         hits = [p.avg_field_pause_ms > 3000,
                 p.account_number_pasted or p.account_number_bursts >= 3,
                 p.app_switches >= 2,
                 p.session_seconds > 300]
-    if p.on_device_score >= 0:                      # the phone's model counts as one more vote
+    if p.on_device_score >= 0:
         hits.append(p.on_device_score >= ONDEVICE_THRESHOLD)
     return sum(hits) >= 2
 
 
 def rule_part(req: ScoreRequest, use_baseline: bool = True):
-    """Rule signals and the model's feature vector for one payment."""
     user = DEMO_USERS.get(req.user_id, DEFAULT_USER)
     ratio = req.amount / max(user["usual_amount"], 1)
     share = req.amount / max(user["balance"], 1)
     a, p = req.account, req.phone
     new_payee = a.payee_added_minutes_ago < 24 * 60
 
-    signals = []   # (points, reason shown to the customer)
+    signals = []
     if p.call_active:
         signals.append((2, "You are on a call while making this payment"))
     if new_payee:
@@ -228,7 +210,7 @@ def rule_part(req: ScoreRequest, use_baseline: bool = True):
         signals.append((2, "Transfer limit raised today"))
     if share >= 0.5:
         signals.append((2, "This sends more than half your balance"))
-    # Mule network: the same receiving account already appeared in other held payments.
+
     if req.payee_account_hash:
         k = sum(1 for c in CASES.values() if c.get("payee_hash") == req.payee_account_hash
                 and c["tier"] >= 2 and not c.get("study"))
@@ -243,7 +225,6 @@ def rule_part(req: ScoreRequest, use_baseline: bool = True):
     return sum(sg[0] for sg in signals), len(signals), [sg[1] for sg in signals], x, user
 
 
-# Hindi versions of the customer reasons (most victims are older and may not read English).
 HINDI = [
     (r"You are on a call while making this payment", "भुगतान करते समय आप फ़ोन कॉल पर हैं"),
     (r"New payee added (\d+) minutes ago", "नया प्राप्तकर्ता {0} मिनट पहले जोड़ा गया"),
@@ -271,17 +252,17 @@ def to_hindi(reason: str) -> str:
 
 
 def decide(points: int, n: int, prob: float, amount: float) -> int:
-    # Rule guard: no single signal can raise an alert.
+
     tier = 0
     if points >= 5 and n >= 2:
         tier = 1
     if points >= 8 and n >= 3:
         tier = 2
-    # Model refines within the guard.
+
     if tier == 2 and prob < 0.05:
-        tier = 1                                   # looks like a genuine large payment
+        tier = 1
     if tier == 2 and prob >= 0.6 and amount >= 100_000:
-        tier = 3                                   # highest risk and amount -> human review
+        tier = 3
     return tier
 
 
@@ -291,14 +272,13 @@ def score(req: ScoreRequest):
     tier = decide(points, n, prob, req.amount)
     sm = req.safety_mode
     if sm.enabled and req.phone.call_active and req.amount >= sm.limit and tier < 2:
-        # The customer's own rule, so it may hold a payment on its own.
+
         tier = 2
         reasons = reasons + [f"Your Safety Mode holds payments over Rs {sm.limit:,.0f} made during a call"]
     return tier, prob, reasons if tier > 0 else [], user
 
 
 def score_many(reqs):
-    """Batch version used by the evaluation (same logic as score, fixed limits so results are repeatable)."""
     parts = [rule_part(r, use_baseline=False) for r in reqs]
     probs = MODEL.predict_proba(np.array([pt[3] for pt in parts], dtype=float))[:, 1]
     out = []
@@ -320,7 +300,7 @@ def score_payment(req: ScoreRequest):
     if req.study.volunteer:
         log_study(req, tier)
     elif tier == 0:
-        update_baseline(req.user_id, req.phone)     # only ordinary payments teach the baseline
+        update_baseline(req.user_id, req.phone)
     save_case({
         "case_id": case_id, "time": time.strftime("%H:%M:%S"), "user_id": req.user_id,
         "user_name": user["name"], "guardian": user["guardian"], "payee": req.payee_id,
@@ -338,7 +318,6 @@ def score_payment(req: ScoreRequest):
 
 @app.post("/checkin")
 def checkin(req: CheckIn):
-    """Safety questions on the warning/hold screen. Any 'yes' sends the payment to a bank officer."""
     case = CASES.get(req.case_id)
     if not case:
         raise HTTPException(404, "Unknown case")
@@ -363,7 +342,7 @@ def confirm(req: ConfirmRequest):
         return {"status": "still_held", "reason": "A call is still active. End the call, then confirm again."}
     if case["tier"] == 3 and case["status"] != "released":
         return {"status": "still_held", "reason": "Waiting for a bank officer to review this payment."}
-    # Demo shortcut: the 4-hour cooling period is skipped so the flow can be shown live.
+
     case["status"] = "released"
     save_case(case)
     return {"status": "released"}
@@ -383,7 +362,6 @@ def cases():
 
 @app.get("/study/summary")
 def study_summary():
-    """Average phone signals per condition, for the results slide."""
     if not os.path.exists(STUDY_FILE):
         return {"runs": 0}
     with open(STUDY_FILE) as f:
@@ -409,7 +387,6 @@ def study_summary():
     return out
 
 
-# ---------------------------------------------------------------- web pages
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="refresh" content="5"><title>{title}</title>
 <style>body{{font-family:-apple-system,Arial,sans-serif;background:#F7F5EF;color:#1B2333;margin:24px}}
@@ -475,13 +452,10 @@ def guardian(case_id: str):
     return PAGE.format(title="Guardian alert", body=body)
 
 
-# ------------------------------------------------------------ evaluation
-# Fresh synthetic test set, generated with a different seed from training (never seen by the model).
-# Phone-behaviour distributions are our assumptions until the volunteer study measures them.
 def make_test_set(seed=2026, n_normal=20_000, n_life=300, n_scam=300, n_adaptive=75):
     rng = np.random.default_rng(seed)
     usual = DEMO_USERS["demo_user_1"]["usual_amount"]
-    rows = []   # (kind, label, ScoreRequest)
+    rows = []
 
     def req(ratio, new_p, fd, limit, prior, call, sess, pause, pasted, bursts, switches):
         return ScoreRequest(
@@ -607,13 +581,12 @@ def metrics_page():
 
 class LabelledCase(BaseModel):
     case: ScoreRequest
-    label: int | None = None     # 1 = scam, 0 = genuine (optional)
+    label: int | None = None
     name: str = ""
 
 
 @app.post("/evaluate")
 def evaluate(cases: list[LabelledCase]):
-    """Score a batch of test cases (e.g. the jury's kit). If labels are given, also returns metrics."""
     results = score_many([c.case for c in cases])
     preds = [{"name": c.name, "label": c.label, "tier": t, "decision": LABELS[t], "score": round(pr, 3),
               "reasons": rs} for c, (t, pr, rs) in zip(cases, results)]
@@ -627,7 +600,6 @@ def evaluate(cases: list[LabelledCase]):
 
 @app.get("/report/{case_id}", response_class=HTMLResponse)
 def report_pack(case_id: str):
-    """Evidence pack for a complaint to the 1930 helpline / cybercrime.gov.in (synthetic demo data)."""
     c = CASES.get(case_id)
     if not c:
         raise HTTPException(404, "Unknown case")

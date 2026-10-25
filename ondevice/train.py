@@ -1,8 +1,7 @@
-# Train the small on-device pressure model on synthetic phone signals (seed 11, separate from test seed 2026).
 import sys, numpy as np
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'server'))
-# Run from the repo root: python3 ondevice/train.py  (prints the weights pasted into MainActivity.kt and main.py)
+
 import main as m
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
@@ -20,7 +19,7 @@ print('weights', [round(w, 4) for w in clf.coef_[0]], 'bias', round(clf.intercep
 print('test AUC', round(roc_auc_score(yt, pt), 3))
 for th in (0.5, 0.7, 0.8):
     print(th, 'scam caught', round((pt[yt == 1] >= th).mean(), 3), 'genuine flagged', round((pt[yt == 0] >= th).mean(), 4))
-# the 4 volunteer averages as a sanity check
+
 for name, f in [('normal avg', [4066, 1.5, 0, 67.5, 0]), ('pressured avg', [20379, 3, 2, 169.5, 0])]:
     v = [np.log1p(f[0]), f[1], f[2], np.log1p(f[3]), f[4]]
     print(name, round(clf.predict_proba([v])[0, 1], 3))

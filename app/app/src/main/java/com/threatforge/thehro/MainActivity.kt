@@ -37,9 +37,6 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-// ---------------------------------------------------------------------------
-// Phone signals. Only counts and timings are kept; no text, audio or contacts.
-// ---------------------------------------------------------------------------
 object Signals {
     var sessionStart = SystemClock.elapsedRealtime()
     var appSwitches = 0
@@ -65,16 +62,14 @@ object Signals {
     fun onAccountChange(old: String, new: String) {
         val now = SystemClock.elapsedRealtime()
         if (new.length - old.length >= 4) {
-            accountPasted = true                       // several digits arrived at once
+            accountPasted = true
         } else if (new.length > old.length) {
             if (lastAccountCharAt == 0L || now - lastAccountCharAt > 1500) accountBursts++
-            lastAccountCharAt = now                    // a pause >1.5 s starts a new burst
+            lastAccountCharAt = now
         }
         onInput()
     }
 
-    // On-device pressure model (logistic regression, trained on synthetic sessions; see ondevice/train.py).
-    // Runs entirely on the phone: only the final score is sent to the bank.
     private val W = doubleArrayOf(0.9411, 1.6986, 1.2457, 4.5118, 0.548)
     private const val B = -32.6609
     fun pressureScore(): Double {
@@ -89,7 +84,6 @@ object Signals {
     fun sessionSeconds(): Long = (SystemClock.elapsedRealtime() - sessionStart) / 1000
 }
 
-// Yes/no only: is any phone or VoIP call (WhatsApp etc.) using the audio right now.
 fun isCallActive(ctx: Context): Boolean {
     val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     return am.mode == AudioManager.MODE_IN_CALL || am.mode == AudioManager.MODE_IN_COMMUNICATION
@@ -107,11 +101,9 @@ suspend fun postJson(url: String, body: JSONObject): JSONObject = withContext(Di
     JSONObject(stream.bufferedReader().use { it.readText() })
 }
 
-// The account number is hashed on the phone; the bank compares hashes to spot mule accounts.
 fun sha256(t: String): String = java.security.MessageDigest.getInstance("SHA-256")
     .digest(t.toByteArray()).joinToString("") { "%02x".format(it) }
 
-// "Is this caller real?" – plain-language facts for the agency the scammer claims to be from.
 val CALLER_FACTS = mapOf(
     "CBI" to ("CBI never arrests anyone on a call or asks for money. There is no ‘digital arrest’ in Indian law. Hang up and call 1930." to
               "सीबीआई कभी फ़ोन पर गिरफ़्तार नहीं करती, न पैसे माँगती है। ‘डिजिटल अरेस्ट’ जैसा कोई क़ानून नहीं है। फ़ोन काटें और 1930 पर कॉल करें।"),
@@ -133,7 +125,7 @@ class MainActivity : ComponentActivity() {
         setContent { MaterialTheme { ThehroApp() } }
     }
 
-    override fun onStop() {           // user left the app (e.g. went back to WhatsApp)
+    override fun onStop() {
         super.onStop()
         Signals.appSwitches++
     }
@@ -144,25 +136,21 @@ fun ThehroApp() {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // Server address: emulator -> 10.0.2.2 reaches this laptop. Real phone -> laptop's Wi-Fi IP.
     var serverUrl by remember { mutableStateOf("http://localhost:8000") }
 
     var payee by remember { mutableStateOf("") }
     var account by remember { mutableStateOf("") }
     var amount by remember { mutableStateOf("") }
 
-    // Demo controls: simulated bank-side events (no real bank connection).
     var fdBroken by remember { mutableStateOf(false) }
     var newPayee by remember { mutableStateOf(true) }
     var limitRaised by remember { mutableStateOf(false) }
     var priorLarge by remember { mutableStateOf("0") }
-    var simulateCall by remember { mutableStateOf(false) }   // emulator cannot place calls
+    var simulateCall by remember { mutableStateOf(false) }
 
-    // Volunteer test: leave Volunteer ID empty for normal demo use.
     var volunteerId by remember { mutableStateOf("") }
     var pressuredRun by remember { mutableStateOf(false) }
 
-    // Safety Mode: the customer's own rule – hold payments above a limit made during a call.
     var safetyOn by remember { mutableStateOf(false) }
     var safetyLimit by remember { mutableStateOf("20000") }
 
@@ -172,7 +160,6 @@ fun ThehroApp() {
 
     fun callNow() = isCallActive(ctx) || simulateCall
 
-    // Language of the warning screen, and spoken alerts (Text-to-Speech, built into Android).
     var hindi by remember { mutableStateOf(false) }
     val tts = remember { mutableStateOf<TextToSpeech?>(null) }
     DisposableEffect(Unit) {
@@ -202,7 +189,6 @@ fun ThehroApp() {
 
         val r = result
         if (r == null) {
-            // ------------------------- Transfer screen -------------------------
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(volunteerId, { volunteerId = it }, label = { Text("Volunteer ID (test only)") },
                     singleLine = true, modifier = Modifier.weight(1f))
@@ -246,9 +232,7 @@ fun ThehroApp() {
                     singleLine = true, modifier = Modifier.weight(1.6f))
             }
 
-
         } else {
-            // -------------------------- Result screen --------------------------
             val tier = r.optInt("tier", 0)
             val (color, title) = when (tier) {
                 0 -> Color(0xFF2E7D32) to (if (hindi) "भुगतान भेजा गया" else "Payment sent")
@@ -260,7 +244,6 @@ fun ThehroApp() {
             val safetyHi = "पुलिस या सरकारी एजेंसी कभी फ़ोन पर पैसे नहीं माँगती।"
             val spokenEn = "Stop. This payment is on hold for your safety. $safetyEn Please end the call now."
             val spokenHi = "रुकिए। आपकी सुरक्षा के लिए यह भुगतान रोका गया है। $safetyHi कृपया कॉल अभी काट दें।"
-            // Speak the alert once when a payment is held, so the user hears it even while on the call.
             LaunchedEffect(r) { if (tier >= 2) { kotlinx.coroutines.delay(400); speak(spokenEn, spokenHi) } }
             Box(Modifier.fillMaxWidth().background(color).padding(16.dp)) {
                 Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -278,7 +261,6 @@ fun ThehroApp() {
             }
             if (tier >= 1) Text(if (hindi) safetyHi else safetyEn, fontWeight = FontWeight.SemiBold)
 
-            // "Is this caller real?" – one tap shows (and speaks) the facts about the claimed agency.
             if (tier >= 1) {
                 var claimed by remember(r) { mutableStateOf("") }
                 Text(if (hindi) "कॉल करने वाला कहता है कि वह यहाँ से है:" else "Is this caller real? They say they are from:",
@@ -303,7 +285,6 @@ fun ThehroApp() {
                      "Your payment is blocked until a bank officer calls you.",
                 color = Color(0xFFB0401A), fontWeight = FontWeight.Bold)
 
-            // Safety check: three yes/no questions. Any "yes" sends the payment to a bank officer.
             if (tier in 1..2 && r.has("case_id")) {
                 var answers by remember(r) { mutableStateOf(listOf(false, false, false)) }
                 var sent by remember(r) { mutableStateOf(false) }
@@ -354,7 +335,6 @@ fun ThehroApp() {
                     Text(if (hindi) "आपके परिवार को सूचित किया गया: $guardian" else "Guardian alerted: $guardian",
                         color = Color(0xFF1F6F8B), fontWeight = FontWeight.SemiBold)
                     OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
-                        // Lets the user (or the app, in production) message the guardian directly.
                         val who = r.optString("customer", "Your family member")
                         val msg = "Thehro safety alert: $who is trying to send Rs ${r.optLong("amount")} " +
                                 "while on a phone call. The bank has paused it. Please call $who now. " +
@@ -365,7 +345,6 @@ fun ThehroApp() {
                     ToggleRow("Simulate active call (emulator only)", simulateCall) { simulateCall = it }
                     Text("Call active now: ${if (callNow()) "yes" else "no"}", color = Color.Gray)
                     OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
-                        // Opens the dialer with 1930 filled in; the user presses call. No permission needed.
                         ctx.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:1930")))
                     }) { Text(if (hindi) "साइबर हेल्पलाइन 1930 पर शिकायत करें" else "Report to cyber helpline 1930") }
                 }
@@ -375,7 +354,6 @@ fun ThehroApp() {
     }
     val rr = result
     if (rr != null) {
-        // Action buttons stay pinned at the bottom so they never scroll off screen.
         val tier = rr.optInt("tier", 0)
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)) {
