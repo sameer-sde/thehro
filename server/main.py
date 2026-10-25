@@ -95,6 +95,10 @@ class CheckIn(BaseModel):
     answers: list[bool] = []
 
 
+class EscalateRequest(BaseModel):
+    case_id: str
+
+
 class ConfirmRequest(BaseModel):
     case_id: str
     call_active: bool
@@ -239,6 +243,7 @@ HINDI = [
      "इस खाते में {0} अन्य रोके गए भुगतान आए: संभावित म्यूल खाता"),
     (r"Your Safety Mode holds payments over Rs ([\d,]+) made during a call",
      "आपका सेफ़्टी मोड कॉल के दौरान Rs {0} से ज़्यादा के भुगतान रोकता है"),
+    (r"Customer was unsure and asked to hold this payment", "ग्राहक को यक़ीन नहीं था, इसलिए भुगतान रोका गया"),
     (r"Customer said a caller is directing this payment", "ग्राहक ने बताया कि कॉल करने वाला यह भुगतान करवा रहा है"),
     (r"Unusual hesitation and app switching during this payment", "इस भुगतान के दौरान असामान्य झिझक और ऐप बदलना"),
 ]
@@ -337,6 +342,21 @@ def checkin(req: CheckIn):
     save_case(case)
     return {"escalated": escalated, "tier": case["tier"], "reasons": case["reasons"],
             "reasons_hi": [to_hindi(x) for x in case["reasons"]]}
+
+
+@app.post("/escalate")
+def escalate(req: EscalateRequest):
+    case = CASES.get(req.case_id)
+    if not case:
+        raise HTTPException(404, "Unknown case")
+    reason = "Customer was unsure and asked to hold this payment"
+    if reason not in case["reasons"]:
+        case["reasons"] = case["reasons"] + [reason]
+    if case["tier"] < 2:
+        case.update(tier=2, label=LABELS[2], status="held")
+    save_case(case)
+    return {"tier": case["tier"], "reasons": case["reasons"],
+            "reasons_hi": [to_hindi(x) for x in case["reasons"]], "hold_minutes": 240}
 
 
 @app.post("/confirm")

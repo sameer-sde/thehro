@@ -138,3 +138,11 @@ def test_cases_export_csv():
     body = m.cases_csv().body
     body = body.decode() if isinstance(body, bytes) else body
     assert body.startswith("case_id,") and "HOLD" in body
+
+
+def test_warning_no_moves_to_hold():
+    r = pay(amount=60000, call=True, new_payee=True)
+    assert r["tier"] == 1
+    res = m.escalate(m.EscalateRequest(case_id=r["case_id"]))
+    assert res["tier"] == 2
+    assert "Customer was unsure and asked to hold this payment" in res["reasons"]
