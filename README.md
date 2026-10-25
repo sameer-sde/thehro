@@ -139,6 +139,21 @@ sequenceDiagram
 | Adaptive scams (small amounts, no call), flagged | 70.7% |
 | **Main weakness:** genuine large payments flagged | 70.7% |
 
+### Does the ML model add value?
+
+Same 20,675 test payments, three approaches:
+
+| Approach | Scams flagged | Scams held | Genuine **held** | Precision of holds |
+|---|---|---|---|---|
+| Rules only | 92.8% | 76.3% | 0.32% | 81.7% |
+| Model only | 69.9% | 56.8% | 0.08% | 92.6% |
+| **Thehro (rules + model)** | **92.8%** | 64.0% | **0.17%** | **87.6%** |
+
+The model **halves wrongful holds** (65 down to 34 genuine customers per 20,300) while keeping 92.8% of scams flagged. The model alone would miss 30% of scams, which is why the rule guard stays in front. The scams the model moves from "hold" to "warn" still see the warning and the safety check.
+
+**Confusion matrix (held):** 240 scams held, 135 scams not held (most still warned), 34 genuine held, 20,266 genuine passed.
+**Model alone:** PR-AUC 0.88, ROC-AUC 0.997 (synthetic data, so expect lower on real data).
+
 ### Volunteer pilot (`GET /study/summary`)
 
 2 team members, 4 runs: the same ₹5,000 payment made calmly, then while a teammate played a "CBI officer" reading the account number aloud and rushing them.
@@ -178,7 +193,9 @@ thehro/
 │                                 signals, on-device model, transfer + result screens
 ├── server/
 │   ├── main.py                   FastAPI scoring service, model, pages, evaluation
+│   ├── test_main.py              automated tests (pytest)
 │   └── requirements.txt
+├── .github/workflows/tests.yml   runs the tests on every push
 ├── ondevice/
 │   └── train.py                  trains the on-device pressure model, prints its weights
 └── README.md
@@ -195,7 +212,7 @@ thehro/
 | `GET /guardian/{case_id}` | Guardian alert page |
 | `GET /report/{case_id}` | Report pack for 1930 / cybercrime.gov.in |
 | `GET /baseline/{user_id}` | The user's learned normal pace |
-| `GET /metrics` · `/metrics.json` | Held-out evaluation with failure cases |
+| `GET /metrics` · `/metrics.json` | Held-out evaluation: rules vs model vs combined, confusion matrices, failure cases |
 | `POST /evaluate` | Score a labelled batch (e.g. a jury test kit) |
 | `GET /study/summary` | Volunteer study comparison |
 | `GET /docs` | Interactive API docs |
@@ -231,6 +248,32 @@ The app's server URL defaults to `http://localhost:8000`.
 7. Turn on **🛡 Safety Mode** (₹20,000), simulate a call and send ₹25,000. It's held by the customer's own rule. Tap **CBI** under "Is this caller real?".
 
 *Demo mode skips the 4-hour cooling period so the release can be shown live. Bank events are simulated with the demo switches.*
+
+---
+
+## Tests
+
+```bash
+cd server && pytest -q
+```
+
+17 automated tests cover the core guarantees: a normal payment passes, the scam pattern is held with reasons, **no single signal can alert**, release is refused during a call, the safety check escalates, analyst release, mule detection (and that a mule match alone doesn't alert), Safety Mode limits, the on-device score as one vote only, invalid payloads rejected, and the model reducing false holds compared with rules alone. They run on every push via GitHub Actions.
+
+---
+
+## Production hardening (next steps for a bank pilot)
+
+What the prototype does today, and what a bank deployment adds:
+
+| Area | Prototype today | Bank deployment |
+|---|---|---|
+| Enforcing the hold | Scoring service returns the decision; the demo app shows it | **Thehro is advisory**: the bank's payment-authorisation system enforces the hold, with a server-side state machine `PENDING → HELD → RELEASED / CANCELLED` |
+| Storage | Cases and baselines persist to files and survive restarts | PostgreSQL with transactions and unique constraints; retries are idempotent so a payment can't be released twice |
+| Analyst access | Open demo page | Authenticated, role-based access; every release, keep and override in a tamper-resistant audit log |
+| Failure handling | App reports if the server is unreachable | Defined timeout and fallback: if scoring is down, payments above a limit made during a call fall back to a warning, never a silent pass |
+| Signals | Measured within the payment screen only | Explicit consent, accessibility-aware baselines (slow typists, screen readers), missing signals never treated as fraud |
+| Models | Trained on synthetic data | Retrained on consented sessions and confirmed fraud labels; calibrated thresholds tuned to the bank's cost of a false hold vs a missed scam; scenario-level train/test splits |
+| Operations | Manual runs | Latency monitoring (p50/p95/p99), error and timeout rates, rate limiting, secret and dependency scanning |
 
 ---
 
