@@ -270,6 +270,9 @@ fun ThehroApp() {
                 Chip("हिंदी", hindi, Modifier.weight(1f)) { hindi = !hindi }
                 Chip(if (hindi) "🔊 सुनें" else "🔊 Read aloud", false, Modifier.weight(1f)) { speak(spokenEn, spokenHi) }
             }
+            if (r.optBoolean("released")) Text(
+                if (hindi) "कॉल ख़त्म होने के बाद भुगतान जारी किया गया।" else "Released after the call ended. Your money is on its way.",
+                fontWeight = FontWeight.SemiBold, color = Color(0xFF2E7D32))
             if (r.optBoolean("offline")) Text(
                 if (hindi) "बैंक की सुरक्षा जाँच उपलब्ध नहीं थी। ऐप ने फ़ोन पर ही एक सरल नियम लगाया।"
                 else "Bank safety check was unreachable. The app used a simple on-phone rule instead.",
@@ -410,8 +413,10 @@ fun ThehroApp() {
                                 val res = postJson("$serverUrl/confirm", JSONObject()
                                     .put("case_id", rr.optString("case_id"))
                                     .put("call_active", callNow()))
-                                status = if (res.optString("status") == "released") "Released – payment sent"
-                                         else res.optString("reason", "Still held")
+                                if (res.optString("status") == "released") {
+                                    status = ""
+                                    result = JSONObject().put("tier", 0).put("released", true)
+                                } else status = res.optString("reason", "Still held")
                             } catch (e: Exception) { status = "Could not reach server: ${e.message}" }
                         }
                     }) { Text(if (tier == 2) "Call ended – confirm" else "Check status") }
